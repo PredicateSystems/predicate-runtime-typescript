@@ -199,9 +199,12 @@ export class SentienceBrowser implements IBrowser {
     let extensionSource = '';
 
     const candidates = [
-      // Production / Installed Package
+      // Production / Installed Package (npm)
       path.resolve(__dirname, '../extension'),
       path.resolve(__dirname, 'extension'),
+      // Source directory (when running from src/ or npm package with src/)
+      path.resolve(__dirname, '../src/extension'),
+      path.resolve(__dirname, '../../src/extension'),
       // Local Monorepo Dev
       path.resolve(__dirname, '../../sentience-chrome'),
       path.resolve(__dirname, '../../../sentience-chrome'),
