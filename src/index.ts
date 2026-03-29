@@ -42,6 +42,7 @@ export {
   LLMResponse,
   LocalLLMProvider,
   LocalVisionLLMProvider,
+  OllamaProvider,
   OpenAIProvider,
   AnthropicProvider,
   GLMProvider,
@@ -107,7 +108,22 @@ export {
   type PermissionRecoveryConfig,
   type VisionFallbackConfig,
   type CaptchaConfig,
-} from './agents/browser-agent';
+  // Planner-Executor Agent (two-tier LLM architecture)
+  type SnapshotEscalationConfig,
+  type RetryConfig,
+  type StepwisePlanningConfig,
+  type PlannerExecutorConfig,
+  ConfigPreset,
+  getConfigPreset,
+  mergeConfig,
+  DEFAULT_CONFIG,
+  type CreateAgentOptions,
+  type AgentProviders,
+  detectProvider,
+  createProvider,
+  resolveConfig,
+  createPlannerExecutorAgentProviders,
+} from './agents';
 export * from './captcha/types';
 export * from './captcha/strategies';
 export * from './tools';

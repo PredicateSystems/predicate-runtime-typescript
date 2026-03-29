@@ -27,6 +27,11 @@ export class Tracer {
   private stepFailures: number = 0;
   private hasErrors: boolean = false;
 
+  // Cleanup tracking (for process exit safety net)
+  private _closed: boolean = false;
+  // Callback invoked when close() is called (used by tracer-factory for cleanup registry)
+  public _onCloseCallback?: (tracer: Tracer) => void;
+
   /**
    * Create a new Tracer
    * @param runId - Unique run identifier (UUID)
@@ -319,6 +324,21 @@ export class Tracer {
    * @param blocking - If false, upload happens in background (default: true). Only applies to CloudTraceSink.
    */
   async close(blocking: boolean = true): Promise<void> {
+    // Prevent double-close
+    if (this._closed) {
+      return;
+    }
+    this._closed = true;
+
+    // Notify cleanup registry (unregister from process exit handler)
+    if (this._onCloseCallback) {
+      try {
+        this._onCloseCallback(this);
+      } catch {
+        // Don't let callback errors prevent close
+      }
+    }
+
     // Auto-infer finalStatus if not explicitly set and we have step outcomes
     if (
       this.finalStatus === 'unknown' &&
@@ -333,6 +353,13 @@ export class Tracer {
     } else {
       await this.sink.close();
     }
+  }
+
+  /**
+   * Check if tracer has been closed
+   */
+  isClosed(): boolean {
+    return this._closed;
   }
 
   /**
