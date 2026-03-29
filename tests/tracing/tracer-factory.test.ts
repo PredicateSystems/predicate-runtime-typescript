@@ -394,3 +394,129 @@ describe('createLocalTracer', () => {
     expect(tracer.getSinkType()).toContain('JsonlTraceSink');
   });
 });
+
+describe('Tracer cleanup functionality', () => {
+  const testTracesDir = path.join(process.cwd(), 'traces');
+
+  beforeEach(() => {
+    // Create traces directory
+    if (!fs.existsSync(testTracesDir)) {
+      fs.mkdirSync(testTracesDir, { recursive: true });
+    }
+  });
+
+  afterEach(() => {
+    // Cleanup traces directory
+    if (fs.existsSync(testTracesDir)) {
+      const files = fs.readdirSync(testTracesDir);
+      files.forEach(file => {
+        const filePath = path.join(testTracesDir, file);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      });
+    }
+  });
+
+  describe('isClosed method', () => {
+    it('should return false for new tracer', () => {
+      const tracer = createLocalTracer('test-closed-1');
+      expect(tracer.isClosed()).toBe(false);
+    });
+
+    it('should return true after close is called', async () => {
+      const tracer = createLocalTracer('test-closed-2');
+      expect(tracer.isClosed()).toBe(false);
+
+      await tracer.close();
+
+      expect(tracer.isClosed()).toBe(true);
+    });
+  });
+
+  describe('double-close prevention', () => {
+    it('should prevent double close from causing issues', async () => {
+      const tracer = createLocalTracer('test-double-close');
+      tracer.emitRunStart('TestAgent', 'gpt-4');
+
+      // First close should work
+      await tracer.close();
+      expect(tracer.isClosed()).toBe(true);
+
+      // Second close should be a no-op (no error)
+      await tracer.close();
+      expect(tracer.isClosed()).toBe(true);
+    });
+  });
+
+  describe('_onCloseCallback', () => {
+    it('should call callback when close is invoked', async () => {
+      const tracer = createLocalTracer('test-callback');
+      let callbackInvoked = false;
+      let callbackTracer: any = null;
+
+      tracer._onCloseCallback = (t: any) => {
+        callbackInvoked = true;
+        callbackTracer = t;
+      };
+
+      expect(callbackInvoked).toBe(false);
+
+      await tracer.close();
+
+      expect(callbackInvoked).toBe(true);
+      expect(callbackTracer).toBe(tracer);
+    });
+
+    it('should handle callback errors gracefully', async () => {
+      const tracer = createLocalTracer('test-callback-error');
+
+      tracer._onCloseCallback = () => {
+        throw new Error('Callback error');
+      };
+
+      // Should not throw even when callback throws
+      await expect(tracer.close()).resolves.not.toThrow();
+      expect(tracer.isClosed()).toBe(true);
+    });
+
+    it('should not call callback on second close', async () => {
+      const tracer = createLocalTracer('test-callback-once');
+      let callCount = 0;
+
+      tracer._onCloseCallback = () => {
+        callCount++;
+      };
+
+      await tracer.close();
+      expect(callCount).toBe(1);
+
+      await tracer.close();
+      expect(callCount).toBe(1); // Still 1, not called again
+    });
+  });
+
+  describe('createTracer registers cleanup callback', () => {
+    it('should set _onCloseCallback on created tracer', async () => {
+      const tracer = await createTracer({
+        runId: 'test-cleanup-registration',
+      });
+
+      // Factory should have set up the callback
+      expect(tracer._onCloseCallback).toBeDefined();
+      expect(typeof tracer._onCloseCallback).toBe('function');
+
+      await tracer.close();
+    });
+  });
+
+  describe('createLocalTracer registers cleanup callback', () => {
+    it('should set _onCloseCallback on created tracer', () => {
+      const tracer = createLocalTracer('test-local-cleanup');
+
+      // Factory should have set up the callback
+      expect(tracer._onCloseCallback).toBeDefined();
+      expect(typeof tracer._onCloseCallback).toBe('function');
+    });
+  });
+});

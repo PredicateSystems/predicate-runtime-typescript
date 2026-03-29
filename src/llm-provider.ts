@@ -55,11 +55,11 @@ export abstract class LLMProvider {
    * Override in subclasses that support vision.
    */
 
-  async generateWithImage(
-    systemPrompt: string,
-    userPrompt: string,
-    imageBase64: string,
-    options: Record<string, any> = {}
+  generateWithImage(
+    _systemPrompt: string,
+    _userPrompt: string,
+    _imageBase64: string,
+    _options: Record<string, any> = {}
   ): Promise<LLMResponse> {
     throw new Error(
       `${this.constructor.name} does not support vision. ` +
@@ -270,6 +270,89 @@ export class LocalVisionLLMProvider extends LocalLLMProvider {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+}
+
+/**
+ * Ollama Provider - dedicated wrapper for Ollama local LLM server.
+ *
+ * Ollama serves models locally and provides an OpenAI-compatible endpoint at /v1.
+ * This provider wraps LocalLLMProvider with sensible defaults for Ollama.
+ *
+ * @example
+ * ```typescript
+ * import { OllamaProvider } from '@predicatesystems/runtime';
+ *
+ * const llm = new OllamaProvider({ model: 'qwen3:8b' });
+ * const response = await llm.generate('You are helpful', 'Hello!');
+ * console.log(response.content);
+ * ```
+ *
+ * @example Custom base URL
+ * ```typescript
+ * const llm = new OllamaProvider({
+ *   model: 'llama3:8b',
+ *   baseUrl: 'http://192.168.1.100:11434'
+ * });
+ * ```
+ */
+export class OllamaProvider extends LocalLLMProvider {
+  private _ollamaBaseUrl: string;
+  private _ollamaModelName: string;
+
+  constructor(
+    options: { model: string; baseUrl?: string; timeoutMs?: number } = { model: 'qwen3:8b' }
+  ) {
+    const baseUrl = options.baseUrl ?? 'http://localhost:11434';
+    // Ollama serves OpenAI-compatible API at /v1
+    super({
+      model: options.model,
+      baseUrl: `${baseUrl.replace(/\/$/, '')}/v1`,
+      apiKey: 'ollama', // Ollama doesn't require a real API key
+      timeoutMs: options.timeoutMs,
+    });
+    this._ollamaBaseUrl = baseUrl;
+    this._ollamaModelName = options.model;
+  }
+
+  /**
+   * Ollama runs locally.
+   */
+  get isLocal(): boolean {
+    return true;
+  }
+
+  /**
+   * Provider identifier.
+   */
+  get providerName(): string {
+    return 'ollama';
+  }
+
+  /**
+   * Get the Ollama base URL (without /v1 suffix).
+   */
+  get ollamaBaseUrl(): string {
+    return this._ollamaBaseUrl;
+  }
+
+  /**
+   * JSON mode support varies by Ollama model.
+   * Most instruction-tuned models (qwen, llama, mistral) can output JSON
+   * with proper prompting, but native JSON mode is model-dependent.
+   */
+  supportsJsonMode(): boolean {
+    // Conservative default: rely on prompt engineering for JSON
+    return false;
+  }
+
+  /**
+   * Vision support varies by Ollama model.
+   * Models like llava, bakllava, moondream support vision.
+   */
+  supportsVision(): boolean {
+    const modelLower = this._ollamaModelName.toLowerCase();
+    return ['llava', 'bakllava', 'moondream'].some(v => modelLower.includes(v));
   }
 }
 

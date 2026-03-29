@@ -6,6 +6,7 @@
  * PRODUCTION HARDENING:
  * - Recovers orphaned traces from previous crashes on SDK init (Risk #3)
  * - Passes runId to CloudTraceSink for persistent cache naming (Risk #1)
+ * - Auto-closes tracers on process exit to prevent data loss (atexit safety net)
  */
 
 import * as path from 'path';
@@ -18,6 +19,83 @@ import { randomUUID } from 'crypto';
 import { Tracer } from './tracer';
 import { CloudTraceSink, SentienceLogger } from './cloud-sink';
 import { JsonlTraceSink } from './jsonl-sink';
+
+// ============================================================================
+// Process Exit Cleanup (atexit safety net)
+// ============================================================================
+
+/**
+ * Global registry of active tracers for process exit cleanup.
+ * Uses Map with tracer ID as key to allow proper cleanup on close.
+ *
+ * Note: We store the tracer directly (not WeakRef) because:
+ * 1. Tracers are explicitly unregistered when close() is called
+ * 2. We need the tracer reference available during process exit
+ * 3. If a tracer is garbage collected without close(), we want to close it on exit
+ */
+const activeTracers: Map<number, Tracer> = new Map();
+let nextTracerId = 0;
+let processExitHandlerRegistered = false;
+
+/**
+ * Cleanup handler called on process exit.
+ * Closes all active tracers to ensure trace data is uploaded to cloud.
+ * This prevents data loss when users forget to call tracer.close().
+ */
+function cleanupTracersOnExit(): void {
+  for (const [tracerId, tracer] of activeTracers.entries()) {
+    if (tracer && !tracer.isClosed()) {
+      try {
+        // Use non-blocking close for exit handler
+        // Note: We can't await in exit handlers, so we do best-effort
+        tracer.close(false).catch(() => {
+          // Best effort - don't throw during exit
+        });
+      } catch {
+        // Best effort - don't throw during exit
+      }
+    }
+    activeTracers.delete(tracerId);
+  }
+}
+
+/**
+ * Register a tracer for automatic cleanup on process exit.
+ * @param tracer - Tracer instance to register
+ */
+function registerTracerForCleanup(tracer: Tracer): void {
+  const tracerId = nextTracerId++;
+  activeTracers.set(tracerId, tracer);
+
+  // Set callback on tracer so it unregisters itself when closed
+  tracer._onCloseCallback = () => {
+    activeTracers.delete(tracerId);
+  };
+
+  // Register process exit handlers on first tracer creation
+  if (!processExitHandlerRegistered) {
+    // Handle normal exit
+    process.on('exit', cleanupTracersOnExit);
+    // Handle Ctrl+C
+    process.on('SIGINT', () => {
+      cleanupTracersOnExit();
+      process.exit(130);
+    });
+    // Handle kill
+    process.on('SIGTERM', () => {
+      cleanupTracersOnExit();
+      process.exit(143);
+    });
+    // Handle uncaught exceptions (best effort)
+    process.on('uncaughtException', error => {
+      console.error('Uncaught exception:', error);
+      cleanupTracersOnExit();
+      process.exit(1);
+    });
+
+    processExitHandlerRegistered = true;
+  }
+}
 
 /**
  * Helper to emit run_start event with available metadata
@@ -92,7 +170,7 @@ async function recoverOrphanedTraces(
   let orphanedFiles: string[];
   try {
     orphanedFiles = fs.readdirSync(cacheDir).filter(f => f.endsWith('.jsonl'));
-  } catch (error) {
+  } catch {
     // Silently fail if directory read fails (permissions, etc.)
     return;
   }
@@ -141,7 +219,7 @@ async function recoverOrphanedTraces(
       }
       // Silently skip other failures - don't log errors for orphan recovery
       // These are expected in many scenarios (network issues, invalid API keys, etc.)
-    } catch (error: any) {
+    } catch {
       // Silently skip failures - don't log errors for orphan recovery
       // These are expected in many scenarios (network issues, invalid API keys, etc.)
     }
@@ -189,7 +267,7 @@ function httpPost(
         try {
           const parsed = responseBody ? JSON.parse(responseBody) : {};
           resolve({ status: res.statusCode || 500, data: parsed });
-        } catch (error) {
+        } catch {
           resolve({ status: res.statusCode || 500, data: {} });
         }
       });
@@ -345,6 +423,9 @@ export async function createTracer(options: {
           options.screenshotProcessor
         );
 
+        // Register for process exit cleanup (safety net for forgotten close())
+        registerTracerForCleanup(tracer);
+
         // Auto-emit run_start for complete trace structure
         if (options.autoEmitRunStart !== false) {
           emitRunStart(tracer, options.agentType, options.llmModel, options.goal, options.startUrl);
@@ -383,6 +464,9 @@ export async function createTracer(options: {
 
   const tracer = new Tracer(runId, new JsonlTraceSink(localPath), options.screenshotProcessor);
 
+  // Register for process exit cleanup (ensures file is properly closed)
+  registerTracerForCleanup(tracer);
+
   // Auto-emit run_start for complete trace structure
   if (options.autoEmitRunStart !== false) {
     emitRunStart(tracer, options.agentType, options.llmModel, options.goal, options.startUrl);
@@ -409,5 +493,10 @@ export function createLocalTracer(runId?: string): Tracer {
   const localPath = path.join(tracesDir, `${traceRunId}.jsonl`);
   console.log(`💾 [Sentience] Local tracing: ${localPath}`);
 
-  return new Tracer(traceRunId, new JsonlTraceSink(localPath));
+  const tracer = new Tracer(traceRunId, new JsonlTraceSink(localPath));
+
+  // Register for process exit cleanup (ensures file is properly closed)
+  registerTracerForCleanup(tracer);
+
+  return tracer;
 }

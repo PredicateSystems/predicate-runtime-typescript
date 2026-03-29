@@ -198,21 +198,15 @@ jobs:
 
   publish-compat-shim:
     runs-on: ubuntu-latest
-    needs: build-and-publish
-
-    steps:
+    needs: build-and-publish    steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Node.js
+      uses: actions/checkout@v4    - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
         registry-url: 'https://registry.npmjs.org'
         scope: '@predicatesystems'
-        always-auth: true
-
-    - name: Extract version from tag or input
+        always-auth: true    - name: Extract version from tag or input
       id: version
       run: |
         if [ "${{ github.event_name }}" == "release" ]; then
@@ -222,18 +216,13 @@ jobs:
           VERSION="${{ github.event.inputs.version }}"
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Version: $VERSION"
-
-    - name: Sync shim version and runtime dependency
+        echo "Version: $VERSION"    - name: Sync shim version and runtime dependency
       run: |
         VERSION="${{ steps.version.outputs.version }}"
         npm pkg set version=$VERSION --prefix compat/sdk-shim
-        npm pkg set dependencies."@predicatesystems/runtime"=$VERSION --prefix compat/sdk-shim
-
-    - name: Publish compatibility shim to npm
+        npm pkg set dependencies."@predicatesystems/runtime"=$VERSION --prefix compat/sdk-shim    - name: Publish compatibility shim to npm
       run: |
         cd compat/sdk-shim
         npm publish --access public
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
