@@ -8,16 +8,41 @@
  * Snapshot escalation configuration for reliable element capture.
  *
  * When element selection fails, the agent can retry with increasing element limits.
+ * After exhausting limit escalation, scroll-after-escalation can be used to find
+ * elements that may be outside the current viewport.
+ *
+ * @example
+ * ```typescript
+ * // Default: escalation enabled with step=30
+ * const config: SnapshotEscalationConfig = { enabled: true, limitBase: 60, limitStep: 30 };
+ *
+ * // Enable scroll-after-escalation to find elements below/above viewport
+ * const config: SnapshotEscalationConfig = {
+ *   ...DEFAULT_CONFIG.snapshot,
+ *   scrollAfterEscalation: true,
+ *   scrollDirections: ['down', 'up'],
+ * };
+ * ```
  */
 export interface SnapshotEscalationConfig {
   /** Whether escalation is enabled (default: true) */
   enabled: boolean;
-  /** Starting element limit (default: 50) */
+  /** Starting element limit (default: 60) */
   limitBase: number;
-  /** Increase per escalation step (default: 25) */
+  /** Increase per escalation step (default: 30) */
   limitStep: number;
   /** Maximum element limit (default: 200) */
   limitMax: number;
+  /** Whether to scroll after limit escalation is exhausted (default: true) */
+  scrollAfterEscalation: boolean;
+  /** Maximum scroll attempts per direction (default: 3) */
+  scrollMaxAttempts: number;
+  /** Directions to try scrolling (default: ['down', 'up']) */
+  scrollDirections: Array<'up' | 'down'>;
+  /** Scroll amount as fraction of viewport height (default: 0.4 = 40%) */
+  scrollViewportFraction: number;
+  /** Stabilization delay after scroll in ms (default: 300) */
+  scrollStabilizeMs: number;
 }
 
 /**
@@ -86,9 +111,16 @@ export interface PlannerExecutorConfig {
 export const DEFAULT_CONFIG: PlannerExecutorConfig = {
   snapshot: {
     enabled: true,
-    limitBase: 50,
-    limitStep: 25,
-    limitMax: 200,
+    // Same defaults as Python SDK - formatContext uses multi-strategy selection
+    // to ensure product links are captured even with lower snapshot limits
+    limitBase: 60, // Initial snapshot limit (Python SDK default)
+    limitStep: 30, // Escalation step (Python SDK default)
+    limitMax: 200, // Maximum limit (Python SDK default)
+    scrollAfterEscalation: true,
+    scrollMaxAttempts: 3,
+    scrollDirections: ['down', 'up'],
+    scrollViewportFraction: 0.4,
+    scrollStabilizeMs: 300,
   },
   retry: {
     verifyTimeoutMs: 10000,
@@ -147,16 +179,18 @@ export function getConfigPreset(preset: ConfigPreset | string): PlannerExecutorC
     case ConfigPreset.LOCAL_SMALL_MODEL as string:
     case 'local_small':
       // Optimized for local 4B-8B models (Ollama)
-      // - Tighter token limits work better with small models
+      // - Higher token limits for models like Qwen3 that include reasoning in output
       // - More lenient timeouts for slower local inference
+      // - Higher element limits to capture product links on e-commerce pages
       // - Verbose mode helpful for debugging local model behavior
       return {
         ...DEFAULT_CONFIG,
         snapshot: {
-          enabled: true,
-          limitBase: 60,
-          limitStep: 30,
-          limitMax: 200,
+          ...DEFAULT_CONFIG.snapshot,
+          // Higher limits needed for e-commerce - many elements filtered to interactive roles
+          limitBase: 200, // Capture more elements (was 60)
+          limitStep: 50, // Larger escalation steps (was 30)
+          limitMax: 400, // Higher max for complex pages (was 200)
         },
         retry: {
           verifyTimeoutMs: 15000,
@@ -165,8 +199,13 @@ export function getConfigPreset(preset: ConfigPreset | string): PlannerExecutorC
           executorRepairAttempts: 3,
           maxReplans: 2,
         },
-        plannerMaxTokens: 1024,
-        executorMaxTokens: 64,
+        // No token limit for planner - let Qwen3 thinking models complete reasoning
+        // Small local models need room to think through the task step by step
+        plannerMaxTokens: 8192,
+        // Higher token limit to accommodate Qwen3/DeepSeek models that output reasoning
+        // before the actual action. Qwen3 models can use 4000+ chars of reasoning before
+        // outputting the actual action. Need enough headroom for the model to complete.
+        executorMaxTokens: 4096,
         verbose: true,
       };
 
@@ -250,10 +289,18 @@ export type DeepPartial<T> = {
  * @returns Complete PlannerExecutorConfig
  */
 export function mergeConfig(partial: DeepPartial<PlannerExecutorConfig>): PlannerExecutorConfig {
+  const snapshot: SnapshotEscalationConfig = {
+    ...DEFAULT_CONFIG.snapshot,
+    ...(partial.snapshot ?? {}),
+    // Ensure scrollDirections has correct type
+    scrollDirections: (partial.snapshot?.scrollDirections ??
+      DEFAULT_CONFIG.snapshot.scrollDirections) as Array<'up' | 'down'>,
+  };
+
   return {
     ...DEFAULT_CONFIG,
     ...partial,
-    snapshot: { ...DEFAULT_CONFIG.snapshot, ...(partial.snapshot ?? {}) },
+    snapshot,
     retry: { ...DEFAULT_CONFIG.retry, ...(partial.retry ?? {}) },
     stepwise: { ...DEFAULT_CONFIG.stepwise, ...(partial.stepwise ?? {}) },
   };

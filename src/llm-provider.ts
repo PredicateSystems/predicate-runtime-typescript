@@ -169,7 +169,55 @@ export class LocalLLMProvider extends LLMProvider {
 
       const data = JSON.parse(text);
       const choice = data?.choices?.[0];
-      const content = choice?.message?.content ?? '';
+      const message = choice?.message;
+
+      // Extract content - Ollama/Qwen3 sometimes puts output in 'reasoning' field
+      // when the model uses thinking mode
+      let content = message?.content ?? '';
+
+      // If content is empty but reasoning exists, try to extract the answer from reasoning
+      // The reasoning field often ends with the actual answer after the thinking
+      if (!content && message?.reasoning) {
+        const reasoningLen = message.reasoning.length;
+        // Debug: log the END of the reasoning field (where the answer usually is)
+        const reasoningEnd = message.reasoning.slice(-300);
+        console.log(
+          `[LocalLLMProvider DEBUG] Empty content, reasoning len=${reasoningLen}, last 300 chars:\n${reasoningEnd}`
+        );
+
+        // First, try to extract JSON objects (for planner responses)
+        // Look for the LAST complete JSON object in the reasoning
+        const jsonMatches = [
+          ...message.reasoning.matchAll(/\{[^{}]*"action"\s*:\s*"[^"]+"\s*[^{}]*\}/g),
+        ];
+        if (jsonMatches.length > 0) {
+          content = jsonMatches[jsonMatches.length - 1][0];
+          console.log(`[LocalLLMProvider DEBUG] Extracted JSON from reasoning: ${content}`);
+        } else {
+          // Look for the LAST action pattern in reasoning (answer comes after thinking)
+          // Use matchAll to find all occurrences and take the last one
+          // Priority: TYPE > CLICK > DONE > NONE (more specific actions first)
+          const typeMatches = [...message.reasoning.matchAll(/TYPE\(\d+,\s*"[^"]*"\)/g)];
+          if (typeMatches.length > 0) {
+            content = typeMatches[typeMatches.length - 1][0];
+            console.log(`[LocalLLMProvider DEBUG] Extracted TYPE from reasoning: ${content}`);
+          } else {
+            const clickMatches = [...message.reasoning.matchAll(/CLICK\(\d+\)/g)];
+            if (clickMatches.length > 0) {
+              content = clickMatches[clickMatches.length - 1][0];
+              console.log(`[LocalLLMProvider DEBUG] Extracted CLICK from reasoning: ${content}`);
+            } else if (message.reasoning.includes('DONE')) {
+              // Only use DONE if it's near the end (within last 100 chars)
+              if (message.reasoning.slice(-100).includes('DONE')) {
+                content = 'DONE';
+                console.log(`[LocalLLMProvider DEBUG] Extracted DONE from end of reasoning`);
+              }
+            }
+            // Don't extract NONE - if model is still reasoning, let it continue
+          }
+        }
+      }
+
       const usage = data?.usage;
 
       return {
@@ -299,9 +347,12 @@ export class LocalVisionLLMProvider extends LocalLLMProvider {
 export class OllamaProvider extends LocalLLMProvider {
   private _ollamaBaseUrl: string;
   private _ollamaModelName: string;
+  private _disableThinking: boolean;
 
   constructor(
-    options: { model: string; baseUrl?: string; timeoutMs?: number } = { model: 'qwen3:8b' }
+    options: { model: string; baseUrl?: string; timeoutMs?: number; disableThinking?: boolean } = {
+      model: 'qwen3:8b',
+    }
   ) {
     const baseUrl = options.baseUrl ?? 'http://localhost:11434';
     // Ollama serves OpenAI-compatible API at /v1
@@ -313,6 +364,29 @@ export class OllamaProvider extends LocalLLMProvider {
     });
     this._ollamaBaseUrl = baseUrl;
     this._ollamaModelName = options.model;
+    // For Qwen3 and similar models, disable thinking by default if model name contains "qwen"
+    this._disableThinking = options.disableThinking ?? options.model.toLowerCase().includes('qwen');
+  }
+
+  /**
+   * Override generate to add Ollama-specific options for Qwen3 thinking mode.
+   */
+  async generate(
+    systemPrompt: string,
+    userPrompt: string,
+    options: Record<string, any> = {}
+  ): Promise<LLMResponse> {
+    // For Qwen3 models, add think: false to disable reasoning output
+    // Ollama OpenAI-compatible API passes model options via 'options' field
+    const ollamaOptions = { ...options };
+    if (this._disableThinking) {
+      // Merge with existing options if any
+      ollamaOptions.options = {
+        ...(ollamaOptions.options || {}),
+        think: false,
+      };
+    }
+    return super.generate(systemPrompt, userPrompt, ollamaOptions);
   }
 
   /**

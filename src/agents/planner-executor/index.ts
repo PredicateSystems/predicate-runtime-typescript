@@ -5,8 +5,23 @@
  * - Planner (7B+ model): Generates JSON execution plans
  * - Executor (3B-7B model): Executes steps with tight prompts
  *
- * Note: The full PlannerExecutorAgent class is not yet ported to TypeScript.
- * This module provides configuration and factory helpers for when it is.
+ * Phase 1 (MVP) Features:
+ * - Stepwise (ReAct-style) planning
+ * - Snapshot limit escalation for reliable element capture
+ * - Token usage tracking
+ * - Pre-action authorization hook (for sidecar policy integration)
+ *
+ * Phase 2 (Reliability) Features:
+ * - Scroll-after-escalation (viewport scrolling to find elements)
+ * - Intent heuristics (text pattern matching for common intents)
+ * - Pre-step verification (skip steps if predicates already pass)
+ * - Retry/repair logic (submit method alternation)
+ *
+ * Phase 3 (Advanced) Features:
+ * - Vision fallback detection (detectSnapshotFailure)
+ * - Recovery navigation (RecoveryState, RecoveryCheckpoint)
+ * - Boundary detection (auth pages, checkout pages)
+ * - Modal/overlay dismissal (findDismissalTarget)
  */
 
 // Configuration
@@ -31,3 +46,112 @@ export {
   resolveConfig,
   createPlannerExecutorAgentProviders,
 } from './agent-factory';
+
+// Plan Models (Zod schemas and types)
+export {
+  PredicateSpecSchema,
+  PlanStepSchema,
+  PlanSchema,
+  ReplanPatchSchema,
+  ActionType,
+  StepStatus,
+  type PredicateSpec,
+  type PlanStep,
+  type Plan,
+  type ReplanPatch,
+  type ActionRecord,
+  type StepOutcome,
+  type RunOutcome,
+  type TokenUsageTotals,
+  type TokenUsageSummary,
+  type SnapshotContext,
+  type ParsedAction,
+  type Snapshot,
+  type SnapshotElement,
+} from './plan-models';
+
+// Prompts
+export {
+  buildStepwisePlannerPrompt,
+  buildExecutorPrompt,
+  type StepwisePlannerResponse,
+} from './prompts';
+
+// Utilities
+export {
+  parseAction,
+  extractJson,
+  normalizePlan,
+  validatePlanSmoothness,
+  formatContext,
+} from './plan-utils';
+
+// Predicates
+export {
+  type Predicate,
+  urlContains,
+  urlMatches,
+  exists,
+  notExists,
+  elementCount,
+  anyOf,
+  allOf,
+  buildPredicate,
+  evaluatePredicates,
+} from './predicates';
+
+// Vision Fallback
+export {
+  type SnapshotDiagnostics,
+  type VisionFallbackResult,
+  detectSnapshotFailure,
+  shouldUseVision,
+} from './vision-fallback';
+
+// Recovery Navigation
+export {
+  type RecoveryNavigationConfig,
+  type RecoveryCheckpoint,
+  RecoveryState,
+  DEFAULT_RECOVERY_CONFIG,
+} from './recovery';
+
+// Boundary Detection
+export {
+  type AuthBoundaryConfig,
+  type CheckoutDetectionConfig,
+  type AuthBoundaryResult,
+  type CheckoutDetectionResult,
+  DEFAULT_AUTH_BOUNDARY_CONFIG,
+  DEFAULT_CHECKOUT_CONFIG,
+  detectAuthBoundary,
+  detectCheckoutPage,
+  isCheckoutElement,
+} from './boundary-detection';
+
+// Modal Dismissal
+export {
+  type ModalDismissalConfig,
+  type ModalDismissalResult,
+  DEFAULT_MODAL_CONFIG,
+  findDismissalTarget,
+  detectModalAppearance,
+  detectModalDismissed,
+} from './modal-dismissal';
+
+// Agent
+export {
+  PlannerExecutorAgent,
+  type PlannerExecutorAgentOptions,
+  type PreActionAuthorizer,
+  type AuthorizationResult,
+  type AgentRuntime,
+  type IntentHeuristics,
+} from './planner-executor-agent';
+
+// Runtime (Playwright/Chromium)
+export {
+  PlaywrightRuntime,
+  createPlaywrightRuntime,
+  type PlaywrightRuntimeOptions,
+} from './playwright-runtime';

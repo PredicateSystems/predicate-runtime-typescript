@@ -1,3 +1,4 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ConfigPreset,
   getConfigPreset,
@@ -28,8 +29,9 @@ describe('getConfigPreset', () => {
 
   it('should return optimized config for LOCAL_SMALL_MODEL', () => {
     const config = getConfigPreset(ConfigPreset.LOCAL_SMALL_MODEL);
-    expect(config.plannerMaxTokens).toBe(1024);
-    expect(config.executorMaxTokens).toBe(64);
+    // HIGH token limits for local models like Qwen3 that include reasoning in output
+    expect(config.plannerMaxTokens).toBe(8192);
+    expect(config.executorMaxTokens).toBe(4096);
     expect(config.retry.verifyTimeoutMs).toBe(15000);
     expect(config.retry.verifyMaxAttempts).toBe(6);
     expect(config.verbose).toBe(true);
@@ -59,7 +61,7 @@ describe('getConfigPreset', () => {
 
   it('should accept string preset names', () => {
     const config = getConfigPreset('local_small');
-    expect(config.plannerMaxTokens).toBe(1024);
+    expect(config.plannerMaxTokens).toBe(8192);
   });
 });
 
@@ -169,7 +171,7 @@ describe('resolveConfig', () => {
 
   it('should resolve string preset', () => {
     const config = resolveConfig('local_small');
-    expect(config.plannerMaxTokens).toBe(1024);
+    expect(config.plannerMaxTokens).toBe(8192);
   });
 
   it('should resolve ConfigPreset enum', () => {
@@ -206,7 +208,7 @@ describe('createPlannerExecutorAgentProviders', () => {
       config: ConfigPreset.LOCAL_SMALL_MODEL,
     });
 
-    expect(result.config.plannerMaxTokens).toBe(1024);
+    expect(result.config.plannerMaxTokens).toBe(8192);
     expect(result.config.verbose).toBe(true);
   });
 

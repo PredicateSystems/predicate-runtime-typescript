@@ -1,0 +1,304 @@
+/**
+ * Prompt Builders for PlannerExecutorAgent
+ *
+ * System and user prompts for Planner and Executor LLMs.
+ * Optimized for small local models (4B-8B parameters).
+ */
+
+import type { ActionRecord } from './plan-models';
+
+// ---------------------------------------------------------------------------
+// Stepwise Planner Prompt (ReAct-style)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build system and user prompts for stepwise (ReAct-style) planning.
+ *
+ * Instead of generating a full plan upfront, this prompt asks the LLM to
+ * decide the next single action based on current page state and history.
+ *
+ * @param goal - The overall task goal
+ * @param currentUrl - Current page URL
+ * @param pageContext - Compact representation of page elements
+ * @param actionHistory - List of previously executed actions
+ * @returns Tuple of [systemPrompt, userPrompt]
+ */
+export function buildStepwisePlannerPrompt(
+  goal: string,
+  currentUrl: string,
+  pageContext: string,
+  actionHistory: ActionRecord[]
+): [string, string] {
+  // Build action history text
+  let historyText = '';
+  if (actionHistory.length > 0) {
+    historyText = 'Actions taken so far:\n';
+    for (const rec of actionHistory) {
+      const targetStr = rec.target ? `(${rec.target})` : '';
+      historyText += `  ${rec.stepNum}. ${rec.action}${targetStr} → ${rec.result}`;
+      if (rec.urlAfter) {
+        historyText += ` [URL: ${rec.urlAfter.slice(0, 60)}...]`;
+      }
+      historyText += '\n';
+    }
+    historyText += '\n';
+  }
+
+  // Tight prompt optimized for small local models (7B)
+  // NOTE: /no_think at END of system prompt for Qwen3 compatibility
+  const system = `You are a browser automation planner. Decide the NEXT action.
+
+Actions:
+- CLICK: Click an element. Set "intent" to element type/role. Set "input" to EXACT text from elements list.
+- TYPE_AND_SUBMIT: Type text into a search box and submit. Set "input" to the SEARCH QUERY from the goal (NOT the element label).
+- SCROLL: Scroll page. Set "direction" to "up" or "down".
+- DONE: ONLY return DONE when the ENTIRE goal is complete. NOT after just one step.
+
+WHEN TO USE DONE:
+- "Add to Cart" task: DONE only AFTER clicking the Add to Cart button
+- "Search and click product" task: DONE only AFTER clicking a product link
+- "Search only" task: DONE after search results appear
+- If goal has multiple steps, complete ALL steps before returning DONE
+
+CRITICAL RULE FOR TYPE_AND_SUBMIT:
+- "input" must be the SEARCH QUERY you want to type (e.g., "wireless headphones")
+- "input" is NOT the element label (e.g., NOT "Search Amazon")
+- ONLY use if you see a "searchbox" or "textbox" element
+
+CRITICAL RULE FOR CLICK (after search):
+- After searching, you are on a RESULTS PAGE. Click a PRODUCT LINK to go to product details.
+- Look for LINK elements with product names, prices, or /dp/ URLs
+- Set "input" to the product title text from the elements list
+
+CRITICAL RULE FOR ADD TO CART:
+- On product page, look for "Add to Cart" or "Add to Bag" buttons
+- Set "input" to "Add to Cart" (or exact button text from elements)
+
+Output ONLY valid JSON (no markdown, no \`\`\`):
+{"action":"TYPE_AND_SUBMIT","intent":"searchbox","input":"wireless headphones","reasoning":"search for product"}
+{"action":"CLICK","intent":"product link","input":"Sony WH-1000XM4 Wireless...","reasoning":"click first product result"}
+{"action":"CLICK","intent":"add to cart button","input":"Add to Cart","reasoning":"add item to cart"}
+{"action":"DONE","intent":"completed","reasoning":"clicked add to cart - goal complete"}
+
+RULES:
+1. For TYPE_AND_SUBMIT: "input" = search query from goal (what you want to search for)
+2. For CLICK: "input" = exact text from elements list
+3. Do NOT type into "email" or "newsletter" fields
+4. Do NOT repeat the same action twice
+5. Output ONLY JSON - no <think> tags, no markdown, no prose
+6. Do NOT output <think> or any reasoning
+7. Do NOT return DONE until ALL parts of the goal are complete`;
+
+  // NOTE: /no_think MUST be at the START of user message for Qwen3 models
+  const user = `/no_think
+Goal: ${goal}
+
+Current URL: ${currentUrl}
+
+${historyText}Current page elements (ID|role|text|importance|clickable|...):
+${pageContext}
+
+Based on the goal and current page state, what is the NEXT action to take?`;
+
+  return [system, user];
+}
+
+// ---------------------------------------------------------------------------
+// Executor Prompt
+// ---------------------------------------------------------------------------
+
+/**
+ * Build system and user prompts for the Executor LLM.
+ *
+ * @param goal - Human-readable goal for this step
+ * @param intent - Intent hint for element selection (optional)
+ * @param compactContext - Compact representation of page elements
+ * @param inputText - For TYPE_AND_SUBMIT: text to type. For CLICK: target text to match (optional)
+ * @param category - Task category for category-specific hints (optional)
+ * @param actionType - Action type (CLICK, TYPE_AND_SUBMIT, etc.)
+ * @returns Tuple of [systemPrompt, userPrompt]
+ */
+export function buildExecutorPrompt(
+  goal: string,
+  intent: string | undefined,
+  compactContext: string,
+  inputText?: string,
+  category?: string,
+  actionType?: string
+): [string, string] {
+  const intentLine = intent ? `Intent: ${intent}\n` : '';
+
+  // For CLICK actions, inputText is target to match (not text to type)
+  const isTypeAction = actionType === 'TYPE_AND_SUBMIT' || actionType === 'TYPE';
+  let inputLine = '';
+  if (isTypeAction && inputText) {
+    inputLine = `Text to type: "${inputText}"\n`;
+  } else if (inputText) {
+    inputLine = `Target to find: "${inputText}"\n`;
+  }
+
+  // Get category-specific hints
+  const categoryHints = getCategoryExecutorHints(category);
+  const categoryLine = categoryHints ? `${categoryHints}\n` : '';
+
+  // Build system prompt based on action type
+  let system: string;
+
+  if (isTypeAction && inputText) {
+    // TYPE action - find the INPUT element (textbox/combobox), not the submit button
+    system = `You are an executor for browser automation.
+Task: Find the INPUT element (textbox, combobox, searchbox) to type into.
+Return ONLY ONE line: TYPE(<id>, "text")
+IMPORTANT: Return the ID of the INPUT/TEXTBOX element, NOT the submit button.
+CRITICAL - AVOID these fields (they are NOT search boxes):
+- Fields with 'email', 'newsletter', 'subscribe', 'signup' in the text
+- Fields labeled 'Your email address', 'Email', 'Enter your email'
+- Fields in footer/newsletter sections
+ONLY use fields explicitly labeled for SEARCH (placeholder='Search', aria='Search').
+If NO search field exists, return NONE instead of guessing.
+If you output anything else, the action fails.
+Do NOT output <think> or any reasoning.
+No prose, no markdown, no extra whitespace.
+Example: TYPE(42, "hello world")`;
+  } else {
+    // CLICK action (most common)
+    const searchKeywords = ['search', 'magnify', 'magnifier', 'find'];
+    const productKeywords = ['product', 'item', 'result', 'listing'];
+    const addToCartKeywords = ['add to cart', 'add to bag', 'add to basket', 'buy now'];
+
+    const isSearchAction =
+      (intent && searchKeywords.some(kw => intent.toLowerCase().includes(kw))) ||
+      searchKeywords.some(kw => goal.toLowerCase().includes(kw));
+
+    const isProductAction =
+      (intent && productKeywords.some(kw => intent.toLowerCase().includes(kw))) ||
+      productKeywords.some(kw => goal.toLowerCase().includes(kw));
+
+    const isAddToCartAction =
+      (intent && addToCartKeywords.some(kw => intent.toLowerCase().includes(kw))) ||
+      addToCartKeywords.some(kw => goal.toLowerCase().includes(kw));
+
+    const isTextMatchingAction = intent && intent.toLowerCase().includes('matching');
+    const hasTargetText = Boolean(inputText);
+
+    if (isSearchAction) {
+      system = `You are an executor for browser automation.
+Return ONLY a single-line CLICK(id) action.
+If you output anything else, the action fails.
+Do NOT output <think> or any reasoning.
+SEARCH ICON HINTS: Look for links/buttons with 'search' in text/href, or icon-only elements (text='0' or empty) with 'search' in href.
+Output MUST match exactly: CLICK(<digits>) with no spaces.
+Example: CLICK(12)`;
+    } else if (isTextMatchingAction || hasTargetText) {
+      // When planner specifies target text, executor must match it
+      const targetText = inputText || '';
+      system = `You are an executor for browser automation.
+Return ONLY a single-line CLICK(id) action.
+If you output anything else, the action fails.
+Do NOT output <think> or any reasoning.
+CRITICAL: Find an element with text matching '${targetText}'.
+- Look for: product titles, category names, link text, button labels
+- Text must contain the target words (case-insensitive partial match is OK)
+- If NO element contains the target text, return NONE instead of clicking something random
+Output: CLICK(<digits>) or NONE
+Example: CLICK(42) or NONE`;
+    } else if (isProductAction) {
+      system = `You are an executor for browser automation.
+Return ONLY a single-line CLICK(id) action.
+If you output anything else, the action fails.
+Do NOT output <think> or any reasoning.
+PRODUCT CLICK HINTS:
+- Look for LINK elements (role=link) with product IDs in href (e.g., /7027762, /dp/B...)
+- Prefer links with delivery info text like 'Delivery', 'Ships to Store', 'Get it...'
+- These are inside product cards and will navigate to product detail pages
+- AVOID buttons like 'Search', 'Shop', category buttons, or filter buttons
+- AVOID image slider options (slider image 1, 2, etc.)
+Output MUST match exactly: CLICK(<digits>) with no spaces.
+Example: CLICK(1268)`;
+    } else if (isAddToCartAction) {
+      system = `You are an executor for browser automation.
+Return ONLY a single-line CLICK(id) action.
+If you output anything else, the action fails.
+Do NOT output <think> or any reasoning.
+ADD TO CART HINTS:
+- FIRST: Look for buttons with text: 'Add to Cart', 'Add to Bag', 'Add to Basket', 'Buy Now'
+- If found, click that button directly
+- FALLBACK: If NO 'Add to Cart' button is visible, you are likely on a SEARCH RESULTS page
+  - In this case, click a PRODUCT LINK to go to the product details page first
+  - Look for LINK elements with product IDs in href (e.g., /7027762, /dp/B...)
+  - Prefer links with product names, prices, or delivery info
+- AVOID: 'Search' buttons, category buttons, filter buttons, pagination
+Output MUST match exactly: CLICK(<digits>) with no spaces.
+Example: CLICK(42)`;
+    } else {
+      system = `You are an executor for browser automation.
+Return ONLY a single-line CLICK(id) action.
+If you output anything else, the action fails.
+Do NOT output <think> or any reasoning.
+No prose, no markdown, no extra whitespace.
+Output MUST match exactly: CLICK(<digits>) with no spaces.
+Example: CLICK(12)`;
+    }
+  }
+
+  // Build action instruction based on action type
+  let actionInstruction: string;
+  if (isTypeAction && inputText) {
+    actionInstruction = `Return TYPE(id, "${inputText}"):`;
+  } else if (inputText) {
+    actionInstruction = `Return CLICK(id) for element matching "${inputText}", or NONE if not found:`;
+  } else {
+    actionInstruction = 'Return CLICK(id):';
+  }
+
+  // NOTE: /no_think MUST be at the START of user message for Qwen3 models
+  const user = `/no_think
+Goal: ${goal}
+${intentLine}${categoryLine}${inputLine}
+Elements:
+${compactContext}
+
+${actionInstruction}`;
+
+  return [system, user];
+}
+
+// ---------------------------------------------------------------------------
+// Helper Functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Get category-specific hints for the executor.
+ */
+function getCategoryExecutorHints(category?: string): string {
+  if (!category) return '';
+
+  const categoryLower = category.toLowerCase();
+
+  const hints: Record<string, string> = {
+    shopping: "Priority: 'Add to Cart', 'Buy Now', 'Add to Bag', product links, price elements.",
+    checkout: "Priority: 'Checkout', 'Proceed to Checkout', 'Place Order', payment fields.",
+    form_filling: 'Priority: input fields, textboxes, submit/send buttons, form labels.',
+    search: 'Priority: search box, search button, result links, filter controls.',
+    auth: 'Priority: username/email field, password field, sign in/login button.',
+    extraction: 'Priority: data elements, table cells, list items, content containers.',
+    navigation: 'Priority: navigation links, menu items, breadcrumbs.',
+  };
+
+  return hints[categoryLower] || '';
+}
+
+// ---------------------------------------------------------------------------
+// Stepwise Planner Response Schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Expected response format from stepwise planner.
+ */
+export interface StepwisePlannerResponse {
+  action: 'CLICK' | 'TYPE_AND_SUBMIT' | 'SCROLL' | 'DONE';
+  intent?: string;
+  input?: string;
+  direction?: 'up' | 'down';
+  reasoning?: string;
+}

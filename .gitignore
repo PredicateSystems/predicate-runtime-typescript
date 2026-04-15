@@ -46,4 +46,5 @@ playground
 
 # Temporary directories from sync workflows
 extension-temp/
-
+playground
+.env

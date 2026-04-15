@@ -35,6 +35,9 @@ export interface CreateAgentOptions {
   /** Ollama server URL (default: http://localhost:11434) */
   ollamaBaseUrl?: string;
 
+  /** Timeout for Ollama requests in ms (default: 120000 for local models) */
+  ollamaTimeoutMs?: number;
+
   /** OpenAI API key (defaults to OPENAI_API_KEY env var) */
   openaiApiKey?: string;
 
@@ -95,6 +98,7 @@ export function createProvider(
   provider: 'auto' | 'ollama' | 'openai' | 'anthropic',
   options: {
     ollamaBaseUrl?: string;
+    ollamaTimeoutMs?: number;
     openaiApiKey?: string;
     anthropicApiKey?: string;
   }
@@ -106,6 +110,8 @@ export function createProvider(
       return new OllamaProvider({
         model,
         baseUrl: options.ollamaBaseUrl ?? 'http://localhost:11434',
+        // Default 120s for local models (they're slower and may include reasoning)
+        timeoutMs: options.ollamaTimeoutMs ?? 120_000,
       });
 
     case 'openai': {
@@ -228,6 +234,7 @@ export async function createPlannerExecutorAgentProviders(
     plannerProvider = 'auto',
     executorProvider = 'auto',
     ollamaBaseUrl,
+    ollamaTimeoutMs,
     openaiApiKey,
     anthropicApiKey,
     config,
@@ -238,12 +245,14 @@ export async function createPlannerExecutorAgentProviders(
   // Create providers
   const planner = createProvider(plannerModel, plannerProvider, {
     ollamaBaseUrl,
+    ollamaTimeoutMs,
     openaiApiKey,
     anthropicApiKey,
   });
 
   const executor = createProvider(executorModel, executorProvider, {
     ollamaBaseUrl,
+    ollamaTimeoutMs,
     openaiApiKey,
     anthropicApiKey,
   });
