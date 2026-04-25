@@ -86,6 +86,15 @@ export {
   formatContext,
 } from './plan-utils';
 
+// Task Categories
+export { TaskCategory, normalizeTaskCategory } from './task-category';
+export { AutomationTaskSchema, type AutomationTask } from './automation-task';
+
+// Planner-generated Heuristic Hints
+export { HeuristicHint, type HeuristicHintInput } from './heuristic-hint';
+export { COMMON_HINTS, getCommonHint } from './common-hints';
+export { ComposableHeuristics, type ComposableHeuristicsOptions } from './composable-heuristics';
+
 // Predicates
 export {
   type Predicate,

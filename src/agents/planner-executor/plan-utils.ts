@@ -4,7 +4,8 @@
  * Action parsing, plan normalization, and validation utilities.
  */
 
-import type { ParsedAction, PredicateSpec, Plan, SnapshotElement } from './plan-models';
+import type { ParsedAction, Plan, SnapshotElement } from './plan-models';
+import type { PrunedSnapshotContext } from './pruning-types';
 
 // ---------------------------------------------------------------------------
 // Action Parsing
@@ -278,6 +279,111 @@ function normalizeVerifyPredicate(pred: Record<string, unknown>): Record<string,
   return result;
 }
 
+function normalizeHeuristicHint(hint: unknown): Record<string, unknown> {
+  if (typeof hint !== 'object' || hint === null) {
+    return {};
+  }
+
+  const raw = { ...(hint as Record<string, unknown>) };
+  return {
+    intentPattern:
+      typeof raw.intentPattern === 'string'
+        ? raw.intentPattern
+        : typeof raw.intent_pattern === 'string'
+          ? raw.intent_pattern
+          : '',
+    textPatterns: Array.isArray(raw.textPatterns)
+      ? raw.textPatterns
+      : Array.isArray(raw.text_patterns)
+        ? raw.text_patterns
+        : [],
+    roleFilter: Array.isArray(raw.roleFilter)
+      ? raw.roleFilter
+      : Array.isArray(raw.role_filter)
+        ? raw.role_filter
+        : [],
+    priority: typeof raw.priority === 'number' ? raw.priority : 0,
+    attributePatterns:
+      typeof raw.attributePatterns === 'object' && raw.attributePatterns !== null
+        ? raw.attributePatterns
+        : typeof raw.attribute_patterns === 'object' && raw.attribute_patterns !== null
+          ? raw.attribute_patterns
+          : {},
+  };
+}
+
+function normalizeStep(step: Record<string, unknown>): Record<string, unknown> {
+  const normalizedStep = { ...step };
+
+  if ('action' in normalizedStep && typeof normalizedStep.action === 'string') {
+    const action = normalizedStep.action.toUpperCase();
+    normalizedStep.action = ACTION_ALIASES[action] || action;
+  }
+
+  if ('url' in normalizedStep && !('target' in normalizedStep)) {
+    normalizedStep.target = normalizedStep.url;
+    delete normalizedStep.url;
+  }
+
+  if ('id' in normalizedStep && typeof normalizedStep.id === 'string') {
+    const parsed = parseInt(normalizedStep.id, 10);
+    if (!isNaN(parsed)) {
+      normalizedStep.id = parsed;
+    }
+  }
+
+  if ('verify' in normalizedStep && Array.isArray(normalizedStep.verify)) {
+    normalizedStep.verify = normalizedStep.verify.map((pred: unknown) => {
+      if (typeof pred === 'object' && pred !== null) {
+        return normalizeVerifyPredicate(pred as Record<string, unknown>);
+      }
+      if (typeof pred === 'string') {
+        const parsed = parseStringPredicate(pred);
+        return parsed ?? { predicate: 'unknown', args: [pred] };
+      }
+      return pred;
+    });
+  }
+
+  if ('optional_substeps' in normalizedStep && Array.isArray(normalizedStep.optional_substeps)) {
+    normalizedStep.optionalSubsteps = normalizedStep.optional_substeps.map((substep: unknown) =>
+      normalizeStep(substep as Record<string, unknown>)
+    );
+    delete normalizedStep.optional_substeps;
+  } else if (
+    'optionalSubsteps' in normalizedStep &&
+    Array.isArray(normalizedStep.optionalSubsteps)
+  ) {
+    normalizedStep.optionalSubsteps = normalizedStep.optionalSubsteps.map((substep: unknown) =>
+      normalizeStep(substep as Record<string, unknown>)
+    );
+  }
+
+  if ('stop_if_true' in normalizedStep) {
+    normalizedStep.stopIfTrue = normalizedStep.stop_if_true;
+    delete normalizedStep.stop_if_true;
+  }
+
+  if ('heuristic_hints' in normalizedStep && Array.isArray(normalizedStep.heuristic_hints)) {
+    normalizedStep.heuristicHints = normalizedStep.heuristic_hints.map(normalizeHeuristicHint);
+    delete normalizedStep.heuristic_hints;
+  } else if ('heuristicHints' in normalizedStep && Array.isArray(normalizedStep.heuristicHints)) {
+    normalizedStep.heuristicHints = normalizedStep.heuristicHints.map(normalizeHeuristicHint);
+  }
+
+  return normalizedStep;
+}
+
+function normalizeNumericId(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const parsed = parseInt(value, 10);
+    if (!isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return value;
+}
+
 /**
  * Normalize plan dictionary to handle LLM output variations.
  *
@@ -294,77 +400,41 @@ export function normalizePlan(planDict: Record<string, unknown>): Record<string,
   const result = { ...planDict };
 
   if ('steps' in result && Array.isArray(result.steps)) {
-    result.steps = result.steps.map((step: Record<string, unknown>) => {
-      const normalizedStep = { ...step };
+    result.steps = result.steps.map((step: Record<string, unknown>) => normalizeStep(step));
+  }
 
-      // Normalize action names to uppercase
-      if ('action' in normalizedStep && typeof normalizedStep.action === 'string') {
-        const action = normalizedStep.action.toUpperCase();
-        normalizedStep.action = ACTION_ALIASES[action] || action;
-      }
+  return result;
+}
 
-      // Normalize url -> target for NAVIGATE actions
-      if ('url' in normalizedStep && !('target' in normalizedStep)) {
-        normalizedStep.target = normalizedStep.url;
-        delete normalizedStep.url;
-      }
+export function normalizeReplanPatch(patchDict: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...patchDict };
 
-      // Ensure step id is number
-      if ('id' in normalizedStep && typeof normalizedStep.id === 'string') {
-        const parsed = parseInt(normalizedStep.id, 10);
-        if (!isNaN(parsed)) {
-          normalizedStep.id = parsed;
-        }
-      }
-
-      // Normalize verify predicates
-      if ('verify' in normalizedStep && Array.isArray(normalizedStep.verify)) {
-        normalizedStep.verify = normalizedStep.verify.map((pred: unknown) => {
-          if (typeof pred === 'object' && pred !== null) {
-            return normalizeVerifyPredicate(pred as Record<string, unknown>);
-          } else if (typeof pred === 'string') {
-            const parsed = parseStringPredicate(pred);
-            if (parsed) {
-              return parsed;
-            }
-            return { predicate: 'unknown', args: [pred] };
-          }
-          return pred;
-        });
-      }
-
-      // Normalize optional_substeps recursively
-      if (
-        'optional_substeps' in normalizedStep &&
-        Array.isArray(normalizedStep.optional_substeps)
-      ) {
-        normalizedStep.optionalSubsteps = normalizedStep.optional_substeps.map(
-          (substep: Record<string, unknown>) => {
-            const normalizedSubstep = { ...substep };
-            if ('action' in normalizedSubstep && typeof normalizedSubstep.action === 'string') {
-              normalizedSubstep.action = normalizedSubstep.action.toUpperCase();
-            }
-            if ('url' in normalizedSubstep && !('target' in normalizedSubstep)) {
-              normalizedSubstep.target = normalizedSubstep.url;
-              delete normalizedSubstep.url;
-            }
-            return normalizedSubstep;
-          }
-        );
-        delete normalizedStep.optional_substeps;
-      }
-
-      // Convert snake_case to camelCase for common fields
-      if ('stop_if_true' in normalizedStep) {
-        normalizedStep.stopIfTrue = normalizedStep.stop_if_true;
-        delete normalizedStep.stop_if_true;
-      }
-      if ('heuristic_hints' in normalizedStep) {
-        normalizedStep.heuristicHints = normalizedStep.heuristic_hints;
-        delete normalizedStep.heuristic_hints;
-      }
-
-      return normalizedStep;
+  if ('replace_steps' in result && Array.isArray(result.replace_steps)) {
+    result.replaceSteps = result.replace_steps.map((item: unknown) => {
+      const raw =
+        typeof item === 'object' && item !== null ? { ...(item as Record<string, unknown>) } : {};
+      return {
+        ...raw,
+        id: normalizeNumericId(raw.id),
+        step:
+          typeof raw.step === 'object' && raw.step !== null
+            ? normalizeStep(raw.step as Record<string, unknown>)
+            : raw.step,
+      };
+    });
+    delete result.replace_steps;
+  } else if ('replaceSteps' in result && Array.isArray(result.replaceSteps)) {
+    result.replaceSteps = result.replaceSteps.map((item: unknown) => {
+      const raw =
+        typeof item === 'object' && item !== null ? { ...(item as Record<string, unknown>) } : {};
+      return {
+        ...raw,
+        id: normalizeNumericId(raw.id),
+        step:
+          typeof raw.step === 'object' && raw.step !== null
+            ? normalizeStep(raw.step as Record<string, unknown>)
+            : raw.step,
+      };
     });
   }
 
@@ -453,7 +523,10 @@ export function validatePlanSmoothness(plan: Plan): string[] {
  * @param limit - Maximum number of elements to include
  * @returns Compact string representation
  */
-export function formatContext(elements: SnapshotElement[], limit: number = 200): string {
+export function selectContextElements(
+  elements: SnapshotElement[],
+  limit: number = 200
+): SnapshotElement[] {
   // Filter to interactive elements
   const interactiveRoles = new Set([
     'button',
@@ -488,15 +561,6 @@ export function formatContext(elements: SnapshotElement[], limit: number = 200):
     const hasHref = Boolean(el.href);
     return isInteractive || el.clickable || hasHref;
   });
-
-  // Debug: Log filtering stats
-  const linkCount = elements.filter(el => (el.role || '').toLowerCase() === 'link').length;
-  const buttonCount = elements.filter(el => (el.role || '').toLowerCase() === 'button').length;
-  const hrefCount = elements.filter(el => Boolean(el.href)).length;
-  const clickableCount = elements.filter(el => el.clickable).length;
-  console.log(
-    `  [formatContext] Total: ${elements.length}, Links: ${linkCount}, Buttons: ${buttonCount}, Href: ${hrefCount}, Clickable: ${clickableCount}, After filter: ${filtered.length}`
-  );
 
   // === Multi-strategy selection (like Python SDK) ===
   const selectedIds = new Set<number>();
@@ -571,6 +635,11 @@ export function formatContext(elements: SnapshotElement[], limit: number = 200):
   // Format each element
   // Format: id|role|text|importance|is_primary|bg|clickable|nearby_text|ord|DG|href
   // (matches Python SDK format exactly)
+  return selected;
+}
+
+export function formatContext(elements: SnapshotElement[], limit: number = 200): string {
+  const selected = selectContextElements(elements, limit);
   const lines: string[] = [];
 
   // Add header row
@@ -600,6 +669,26 @@ export function formatContext(elements: SnapshotElement[], limit: number = 200):
   }
 
   return lines.join('\n');
+}
+
+export function formatPrunedContext(
+  context: Pick<
+    PrunedSnapshotContext,
+    | 'category'
+    | 'elements'
+    | 'relaxationLevel'
+    | 'rawElementCount'
+    | 'prunedElementCount'
+    | 'actionableElementCount'
+  >
+): string {
+  return [
+    `Category: ${context.category}`,
+    `Relaxation: ${context.relaxationLevel}`,
+    `Elements: ${context.prunedElementCount}/${context.rawElementCount}`,
+    `Actionable: ${context.actionableElementCount}`,
+    formatContext(context.elements, context.prunedElementCount || 1),
+  ].join('\n');
 }
 
 /**

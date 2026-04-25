@@ -9,6 +9,8 @@
  * successfully navigated as far as possible without credentials.
  */
 
+import type { SnapshotElement, PredicateSpec } from './plan-models';
+
 /**
  * Configuration for authentication boundary detection.
  */
@@ -225,4 +227,120 @@ export function isCheckoutElement(
   }
 
   return false;
+}
+
+function normalizeIntentText(value: string | undefined | null): string {
+  return (value || '').toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function extractUrlSignals(url: string): string[] {
+  if (!url) {
+    return [];
+  }
+
+  try {
+    const parsed = new URL(url);
+    const signals = [
+      parsed.pathname,
+      parsed.search,
+      parsed.searchParams.get('q') || '',
+      parsed.searchParams.get('query') || '',
+      parsed.searchParams.get('search') || '',
+      parsed.searchParams.get('keyword') || '',
+      parsed.searchParams.get('keywords') || '',
+      parsed.searchParams.get('term') || '',
+      parsed.searchParams.get('s') || '',
+    ];
+    return signals.map(signal => normalizeIntentText(signal)).filter(Boolean);
+  } catch {
+    return [normalizeIntentText(url)];
+  }
+}
+
+function queryTerms(text: string | undefined | null): string[] {
+  return normalizeIntentText(text)
+    .split(/\s+/)
+    .filter(term => term.length >= 3);
+}
+
+function urlPredicateSignals(verify: PredicateSpec[] | undefined): string[] {
+  if (!Array.isArray(verify)) {
+    return [];
+  }
+
+  const signals: string[] = [];
+  for (const predicate of verify) {
+    if (
+      predicate &&
+      typeof predicate.predicate === 'string' &&
+      (predicate.predicate === 'url_contains' || predicate.predicate === 'url_matches')
+    ) {
+      const firstArg = predicate.args?.[0];
+      if (typeof firstArg === 'string' && firstArg.trim()) {
+        signals.push(normalizeIntentText(firstArg));
+      }
+    }
+  }
+
+  return signals;
+}
+
+export function isSearchLikeTypeAndSubmit(
+  step: { action?: string; intent?: string; input?: string; verify?: PredicateSpec[] },
+  element?: Pick<SnapshotElement, 'role' | 'text' | 'name' | 'ariaLabel'> | null
+): boolean {
+  if ((step.action || '').toUpperCase() !== 'TYPE_AND_SUBMIT') {
+    return false;
+  }
+
+  const cues = [
+    normalizeIntentText(step.intent),
+    normalizeIntentText(step.input),
+    normalizeIntentText(element?.role),
+    normalizeIntentText(element?.text),
+    normalizeIntentText(element?.name),
+    normalizeIntentText(element?.ariaLabel),
+    ...urlPredicateSignals(step.verify),
+  ].filter(Boolean);
+
+  return cues.some(cue =>
+    /\b(search|searchbox|find|lookup|look up|query|keywords?|results?)\b/.test(cue)
+  );
+}
+
+export function isUrlChangeRelevantToIntent(
+  previousUrl: string,
+  nextUrl: string,
+  step: { action?: string; intent?: string; input?: string; verify?: PredicateSpec[] },
+  element?: Pick<SnapshotElement, 'role' | 'text' | 'name' | 'ariaLabel'> | null
+): boolean {
+  const normalizedPrevious = normalizeIntentText(previousUrl).replace(/\/+$/, '');
+  const normalizedNext = normalizeIntentText(nextUrl).replace(/\/+$/, '');
+  if (!normalizedNext || normalizedNext === normalizedPrevious) {
+    return false;
+  }
+
+  const predicateSignals = urlPredicateSignals(step.verify);
+  const nextSignals = extractUrlSignals(nextUrl);
+  if (
+    predicateSignals.length > 0 &&
+    predicateSignals.every(signal => nextSignals.some(nextSignal => nextSignal.includes(signal)))
+  ) {
+    return true;
+  }
+
+  if (!isSearchLikeTypeAndSubmit(step, element)) {
+    return true;
+  }
+
+  const searchTerms = [
+    ...queryTerms(step.input),
+    ...queryTerms(step.intent),
+    'search',
+    'query',
+    'results',
+    'find',
+  ];
+
+  return searchTerms.some(term => nextSignals.some(signal => signal.includes(term)));
 }
