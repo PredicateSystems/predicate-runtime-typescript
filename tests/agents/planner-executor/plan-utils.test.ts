@@ -34,6 +34,26 @@ describe('parseAction', () => {
     });
   });
 
+  it('parses the final action after leaked thinking output', () => {
+    expect(
+      parseAction(
+        [
+          'So we output exactly: TYPE(168, "noise cancelling earbuds")',
+          '',
+          'However, the problem says: "Return ONLY ONE line: TYPE(<id>, "text")"',
+          '',
+          'Output: TYPE(168, "noise cancelling earbuds")',
+          '</think>',
+          '',
+          'TYPE(168, "noise cancelling earbuds")',
+        ].join('\n')
+      )
+    ).toEqual({
+      action: 'TYPE',
+      args: [168, 'noise cancelling earbuds'],
+    });
+  });
+
   it('does not treat action examples inside prose as executable output', () => {
     expect(
       parseAction(

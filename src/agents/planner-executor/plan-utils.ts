@@ -31,6 +31,11 @@ export function parseAction(text: string): ParsedAction {
 
   // Strip <think>...</think> tags (Qwen/DeepSeek reasoning output)
   cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // Some local models leak reasoning without the opening tag but still close it before the answer.
+  const closingThinkIndex = cleaned.toLowerCase().lastIndexOf('</think>');
+  if (closingThinkIndex !== -1) {
+    cleaned = cleaned.slice(closingThinkIndex + '</think>'.length).trim();
+  }
   // If <think> never closed, strip from first <think> to end
   cleaned = cleaned.replace(/<think>[\s\S]*$/gi, '').trim();
 
