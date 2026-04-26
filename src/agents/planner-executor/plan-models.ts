@@ -48,6 +48,7 @@ export const ActionType = z.enum([
   'PRESS',
   'WAIT',
   'EXTRACT',
+  'STUCK',
   'DONE',
 ]);
 
@@ -59,7 +60,7 @@ export type ActionType = z.infer<typeof ActionType>;
 export interface PlanStep {
   id: number;
   goal: string;
-  action: string;
+  action: ActionType;
   target?: string;
   intent?: string;
   input?: string;
@@ -67,35 +68,46 @@ export interface PlanStep {
   required: boolean;
   stopIfTrue: boolean;
   optionalSubsteps: PlanStep[];
-  heuristicHints: Record<string, unknown>[];
+  heuristicHints: Array<{
+    intentPattern: string;
+    textPatterns: string[];
+    roleFilter: string[];
+    priority: number;
+    attributePatterns: Record<string, string>;
+  }>;
 }
 
-/**
- * Schema for a single step in the execution plan.
- * Note: For simplicity, optionalSubsteps validation is shallow (z.any()).
- * Full recursive validation happens at runtime if needed.
- */
-export const PlanStepSchema = z.object({
-  id: z.number().describe('Step ID (1-indexed, contiguous)'),
-  goal: z.string().describe('Human-readable goal for this step'),
-  action: z
-    .string()
-    .describe('Action type: NAVIGATE, CLICK, TYPE_AND_SUBMIT, SCROLL, EXTRACT, DONE'),
-  target: z.string().optional().describe('URL for NAVIGATE action'),
-  intent: z.string().optional().describe('Intent hint for CLICK action'),
-  input: z.string().optional().describe('Text for TYPE_AND_SUBMIT action'),
-  verify: z.array(PredicateSpecSchema).default([]).describe('Verification predicates'),
-  required: z.boolean().default(true).describe('If True, step failure triggers replan'),
-  stopIfTrue: z
-    .boolean()
-    .default(false)
-    .describe('If True, stop execution when verification passes'),
-  optionalSubsteps: z.array(z.any()).default([]).describe('Optional fallback steps'),
-  heuristicHints: z
-    .array(z.record(z.any()))
-    .default([])
-    .describe('Planner-generated hints for element selection'),
+const HeuristicHintSchema = z.object({
+  intentPattern: z.string(),
+  textPatterns: z.array(z.string()).default([]),
+  roleFilter: z.array(z.string()).default([]),
+  priority: z.number().default(0),
+  attributePatterns: z.record(z.string(), z.string()).default({}),
 });
+
+export const PlanStepSchema = z.lazy(() =>
+  z.object({
+    id: z.number().describe('Step ID (1-indexed, contiguous)'),
+    goal: z.string().describe('Human-readable goal for this step'),
+    action: ActionType.describe(
+      'Action type: NAVIGATE, CLICK, TYPE, TYPE_AND_SUBMIT, SCROLL, PRESS, WAIT, EXTRACT, STUCK, DONE'
+    ),
+    target: z.string().optional().describe('URL for NAVIGATE action'),
+    intent: z.string().optional().describe('Intent hint for CLICK action'),
+    input: z.string().optional().describe('Text for TYPE_AND_SUBMIT action'),
+    verify: z.array(PredicateSpecSchema).default([]).describe('Verification predicates'),
+    required: z.boolean().default(true).describe('If True, step failure triggers replan'),
+    stopIfTrue: z
+      .boolean()
+      .default(false)
+      .describe('If True, stop execution when verification passes'),
+    optionalSubsteps: z.array(PlanStepSchema).default([]).describe('Optional fallback steps'),
+    heuristicHints: z
+      .array(HeuristicHintSchema)
+      .default([])
+      .describe('Planner-generated hints for element selection'),
+  })
+) as z.ZodType<PlanStep>;
 
 // ---------------------------------------------------------------------------
 // Plan
@@ -132,6 +144,19 @@ export const ReplanPatchSchema = z.object({
 });
 
 export type ReplanPatch = z.infer<typeof ReplanPatchSchema>;
+
+export type RepairFailureCategory =
+  | 'parse-failure'
+  | 'element-not-found'
+  | 'verification-failed'
+  | 'auth-or-recovery';
+
+export interface RepairHistoryEntry {
+  attempt: number;
+  failureCategory: RepairFailureCategory;
+  failedAction: string;
+  reason: string;
+}
 
 // ---------------------------------------------------------------------------
 // Action Record (for stepwise planning history)
@@ -175,6 +200,7 @@ export interface StepOutcome {
   goal: string;
   status: StepStatus;
   actionTaken?: string;
+  llmResponseText?: string;
   verificationPassed: boolean;
   usedVision: boolean;
   error?: string;
@@ -291,7 +317,7 @@ export interface SnapshotContext {
   visionReason: string | null;
   /** Pruning category used (if any) */
   pruningCategory: string | null;
-  /** Number of elements after pruning */
+  /** Number of actionable elements after pruning/formatting */
   prunedNodeCount: number;
 }
 

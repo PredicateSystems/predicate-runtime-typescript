@@ -49,9 +49,13 @@ export function buildStepwisePlannerPrompt(
   const system = `You are a browser automation planner. Decide the NEXT action.
 
 Actions:
+- NAVIGATE: Go directly to a URL when the next destination is known. Set "target" to the URL.
 - CLICK: Click an element. Set "intent" to element type/role. Set "input" to EXACT text from elements list.
 - TYPE_AND_SUBMIT: Type text into a search box and submit. Set "input" to the SEARCH QUERY from the goal (NOT the element label).
 - SCROLL: Scroll page. Set "direction" to "up" or "down".
+- WAIT: Wait for content to appear when a follow-up verification is needed.
+- EXTRACT: Extract the requested information from the current page when the task is data collection.
+- STUCK: Use only when the page state is blocked and you cannot make safe forward progress.
 - DONE: ONLY return DONE when the ENTIRE goal is complete. NOT after just one step.
 
 WHEN TO USE DONE:
@@ -75,9 +79,10 @@ CRITICAL RULE FOR ADD TO CART:
 - Set "input" to "Add to Cart" (or exact button text from elements)
 
 Output ONLY valid JSON (no markdown, no \`\`\`):
-{"action":"TYPE_AND_SUBMIT","intent":"searchbox","input":"wireless headphones","reasoning":"search for product"}
-{"action":"CLICK","intent":"product link","input":"Sony WH-1000XM4 Wireless...","reasoning":"click first product result"}
-{"action":"CLICK","intent":"add to cart button","input":"Add to Cart","reasoning":"add item to cart"}
+{"action":"NAVIGATE","target":"https://example.com/search","verify":[{"predicate":"url_contains","args":["search"]}],"reasoning":"open the search page"}
+{"action":"TYPE_AND_SUBMIT","intent":"searchbox","input":"wireless headphones","verify":[{"predicate":"url_contains","args":["search"]}],"reasoning":"search for product"}
+{"action":"CLICK","intent":"product link","input":"Sony WH-1000XM4 Wireless...","verify":[],"required":true,"heuristic_hints":[{"intent_pattern":"product_link","text_patterns":["sony wh-1000xm4"],"role_filter":["link"],"priority":8}],"reasoning":"click first product result"}
+{"action":"CLICK","intent":"add to cart button","input":"Add to Cart","verify":[],"required":true,"heuristic_hints":[{"intent_pattern":"add_to_cart","text_patterns":["add to cart","buy now"],"role_filter":["button"],"priority":10}],"reasoning":"add item to cart"}
 {"action":"DONE","intent":"completed","reasoning":"clicked add to cart - goal complete"}
 
 RULES:
@@ -85,9 +90,12 @@ RULES:
 2. For CLICK: "input" = exact text from elements list
 3. Do NOT type into "email" or "newsletter" fields
 4. Do NOT repeat the same action twice
-5. Output ONLY JSON - no <think> tags, no markdown, no prose
-6. Do NOT output <think> or any reasoning
-7. Do NOT return DONE until ALL parts of the goal are complete`;
+5. Include "verify" when you know a simple URL or element predicate that proves success; otherwise use []
+6. Include planner metadata when useful: "target", "required", "stop_if_true", "optional_substeps", "heuristic_hints"
+7. "heuristic_hints" entries may use snake_case fields: "intent_pattern", "text_patterns", "role_filter", "attribute_patterns", "priority"
+8. Output ONLY JSON - no <think> tags, no markdown, no prose
+9. Do NOT output <think> or any reasoning
+10. Do NOT return DONE until ALL parts of the goal are complete`;
 
   // NOTE: /no_think MUST be at the START of user message for Qwen3 models
   const user = `/no_think
@@ -154,7 +162,8 @@ CRITICAL - AVOID these fields (they are NOT search boxes):
 - Fields with 'email', 'newsletter', 'subscribe', 'signup' in the text
 - Fields labeled 'Your email address', 'Email', 'Enter your email'
 - Fields in footer/newsletter sections
-ONLY use fields explicitly labeled for SEARCH (placeholder='Search', aria='Search').
+Treat searchbox/combobox roles as valid search inputs.
+Accept search labels such as 'Search', 'Search Amazon', 'Search products', 'Search store', or similar search-specific wording in text, placeholder, name, or aria-label.
 If NO search field exists, return NONE instead of guessing.
 If you output anything else, the action fails.
 Do NOT output <think> or any reasoning.
@@ -199,6 +208,7 @@ Do NOT output <think> or any reasoning.
 CRITICAL: Find an element with text matching '${targetText}'.
 - Look for: product titles, category names, link text, button labels
 - Text must contain the target words (case-insensitive partial match is OK)
+- If multiple elements match, choose the one with the strongest text overlap and the most specific visible label
 - If NO element contains the target text, return NONE instead of clicking something random
 Output: CLICK(<digits>) or NONE
 Example: CLICK(42) or NONE`;
@@ -296,9 +306,27 @@ function getCategoryExecutorHints(category?: string): string {
  * Expected response format from stepwise planner.
  */
 export interface StepwisePlannerResponse {
-  action: 'CLICK' | 'TYPE_AND_SUBMIT' | 'SCROLL' | 'DONE';
+  id?: number;
+  goal?: string;
+  action:
+    | 'NAVIGATE'
+    | 'CLICK'
+    | 'TYPE'
+    | 'TYPE_AND_SUBMIT'
+    | 'SCROLL'
+    | 'PRESS'
+    | 'WAIT'
+    | 'EXTRACT'
+    | 'STUCK'
+    | 'DONE';
+  target?: string;
   intent?: string;
   input?: string;
   direction?: 'up' | 'down';
+  verify?: Array<{ predicate: string; args: unknown[] }>;
+  required?: boolean;
+  stopIfTrue?: boolean;
+  optionalSubsteps?: Array<Record<string, unknown>>;
+  heuristicHints?: Array<Record<string, unknown>>;
   reasoning?: string;
 }

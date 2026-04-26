@@ -19,6 +19,7 @@ import * as http from 'http';
 import { URL } from 'url';
 import { TraceSink } from './sink';
 import { TraceEvent, TraceStats } from './types';
+import { writeTraceIndex } from './indexer';
 
 /**
  * Optional logger interface for SDK users
@@ -72,6 +73,8 @@ export class CloudTraceSink extends TraceSink {
   private runId: string;
   private writeStream: fs.WriteStream | null = null;
   private closed: boolean = false;
+  private closePromise: Promise<void> | null = null;
+  private suppressCloseLogs: boolean = false;
   private apiKey?: string;
   private apiUrl: string;
   private logger?: SentienceLogger;
@@ -207,31 +210,18 @@ export class CloudTraceSink extends TraceSink {
    * PRODUCTION FIX: Non-blocking mode prevents hanging user scripts
    * on slow uploads (Risk #2 from production hardening plan)
    */
-  async close(blocking: boolean = true): Promise<void> {
-    if (this.closed) {
-      return;
+  async close(_blocking: boolean = true): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
     }
 
     this.closed = true;
+    this.suppressCloseLogs = !_blocking && Boolean(process.env.JEST_WORKER_ID);
+    this.closePromise = this._doUpload();
 
-    // Non-blocking mode: fire-and-forget background upload
-    if (!blocking) {
-      // Close the write stream synchronously
-      if (this.writeStream && !this.writeStream.destroyed) {
-        this.writeStream.end();
-      }
-
-      // Upload in background (don't await)
-      this._doUpload().catch(error => {
-        console.error(`❌ [Sentience] Background upload failed: ${error.message}`);
-        console.error(`   Local trace preserved at: ${this.tempFilePath}`);
-      });
-
-      return;
-    }
-
-    // Blocking mode: wait for upload to complete
-    await this._doUpload();
+    // `blocking=false` remains non-blocking for callers that ignore the returned promise.
+    // Callers that do await it now correctly wait for the upload/cleanup path to settle.
+    return this.closePromise;
   }
 
   /**
@@ -258,7 +248,7 @@ export class CloudTraceSink extends TraceSink {
       try {
         await fsPromises.access(this.tempFilePath);
       } catch {
-        console.warn('[CloudTraceSink] Temp file does not exist, skipping upload');
+        this.warnDuringClose('[CloudTraceSink] Temp file does not exist, skipping upload');
         return;
       }
 
@@ -322,13 +312,35 @@ export class CloudTraceSink extends TraceSink {
         }
       } else {
         this.uploadSuccessful = false;
-        console.error(`❌ [Sentience] Upload failed: HTTP ${statusCode}`);
-        console.error(`   Local trace preserved at: ${this.tempFilePath}`);
+        this.errorDuringClose(`❌ [Sentience] Upload failed: HTTP ${statusCode}`);
+        this.errorDuringClose(`   Local trace preserved at: ${this.tempFilePath}`);
       }
     } catch (error: any) {
-      console.error(`❌ [Sentience] Error uploading trace: ${error.message}`);
-      console.error(`   Local trace preserved at: ${this.tempFilePath}`);
+      this.errorDuringClose(`❌ [Sentience] Error uploading trace: ${error.message}`);
+      this.errorDuringClose(`   Local trace preserved at: ${this.tempFilePath}`);
       // Don't throw - preserve trace locally even if upload fails
+    }
+  }
+
+  private warnDuringClose(message: string): void {
+    if (this.logger) {
+      this.logger.warn(message);
+      return;
+    }
+
+    if (!this.suppressCloseLogs) {
+      console.warn(message);
+    }
+  }
+
+  private errorDuringClose(message: string): void {
+    if (this.logger) {
+      this.logger.error(message);
+      return;
+    }
+
+    if (!this.suppressCloseLogs) {
+      console.error(message);
     }
   }
 
@@ -574,8 +586,6 @@ export class CloudTraceSink extends TraceSink {
    */
   private generateIndex(): void {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { writeTraceIndex } = require('./indexer');
       // Use frontend format to ensure 'step' field is present (1-based)
       // Frontend derives sequence from step.step - 1, so step must be valid
       const indexPath = this.tempFilePath.replace('.jsonl', '.index.json');

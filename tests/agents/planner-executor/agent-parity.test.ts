@@ -1,0 +1,360 @@
+import { LLMProvider, type LLMResponse } from '../../../src/llm-provider';
+import {
+  PlannerExecutorAgent,
+  StepStatus,
+  type AgentRuntime,
+  type Snapshot,
+} from '../../../src/agents/planner-executor';
+
+class ProviderStub extends LLMProvider {
+  private responses: string[];
+  public calls: Array<{ system: string; user: string; options?: any }> = [];
+  public imageCalls: Array<{ system: string; user: string; imageBase64: string; options?: any }> =
+    [];
+  private readonly vision: boolean;
+
+  constructor(responses: string[] = [], options: { vision?: boolean } = {}) {
+    super();
+    this.responses = [...responses];
+    this.vision = options.vision ?? false;
+  }
+
+  get modelName(): string {
+    return this.vision ? 'vision-stub' : 'stub';
+  }
+
+  supportsJsonMode(): boolean {
+    return true;
+  }
+
+  supportsVision(): boolean {
+    return this.vision;
+  }
+
+  async generate(
+    systemPrompt: string,
+    userPrompt: string,
+    options: Record<string, any> = {}
+  ): Promise<LLMResponse> {
+    this.calls.push({ system: systemPrompt, user: userPrompt, options });
+    const content = this.responses.length ? this.responses.shift()! : 'DONE';
+    return {
+      content,
+      modelName: this.modelName,
+      promptTokens: 10,
+      completionTokens: 5,
+      totalTokens: 15,
+    };
+  }
+
+  async generateWithImage(
+    systemPrompt: string,
+    userPrompt: string,
+    imageBase64: string,
+    options: Record<string, any> = {}
+  ): Promise<LLMResponse> {
+    this.imageCalls.push({ system: systemPrompt, user: userPrompt, imageBase64, options });
+    const content = this.responses.length ? this.responses.shift()! : 'CLICK(1)';
+    return {
+      content,
+      modelName: this.modelName,
+      promptTokens: 12,
+      completionTokens: 6,
+      totalTokens: 18,
+    };
+  }
+}
+
+class RuntimeStub implements AgentRuntime {
+  public currentUrl: string;
+  public clickCalls: number[] = [];
+  public typeCalls: Array<{ elementId: number; text: string }> = [];
+  public keyCalls: string[] = [];
+  public gotoCalls: string[] = [];
+  public scrollCalls: Array<'up' | 'down'> = [];
+  public snapshotCalls = 0;
+
+  constructor(
+    initialUrl: string,
+    private readonly snapshotFactory: (runtime: RuntimeStub) => Snapshot | null,
+    private readonly handlers: {
+      onClick?: (elementId: number, runtime: RuntimeStub) => Promise<void> | void;
+      onType?: (elementId: number, text: string, runtime: RuntimeStub) => Promise<void> | void;
+      onGoto?: (url: string, runtime: RuntimeStub) => Promise<void> | void;
+      onPressKey?: (key: string, runtime: RuntimeStub) => Promise<void> | void;
+    } = {}
+  ) {
+    this.currentUrl = initialUrl;
+  }
+
+  async snapshot(): Promise<Snapshot | null> {
+    this.snapshotCalls += 1;
+    const snap = this.snapshotFactory(this);
+    if (snap) {
+      this.currentUrl = snap.url || this.currentUrl;
+    }
+    return snap;
+  }
+
+  async goto(url: string): Promise<void> {
+    this.gotoCalls.push(url);
+    this.currentUrl = url;
+    await this.handlers.onGoto?.(url, this);
+  }
+
+  async click(elementId: number): Promise<void> {
+    this.clickCalls.push(elementId);
+    await this.handlers.onClick?.(elementId, this);
+  }
+
+  async type(elementId: number, text: string): Promise<void> {
+    this.typeCalls.push({ elementId, text });
+    await this.handlers.onType?.(elementId, text, this);
+  }
+
+  async pressKey(key: string): Promise<void> {
+    this.keyCalls.push(key);
+    await this.handlers.onPressKey?.(key, this);
+  }
+
+  async scroll(direction: 'up' | 'down'): Promise<void> {
+    this.scrollCalls.push(direction);
+  }
+
+  async getCurrentUrl(): Promise<string> {
+    return this.currentUrl;
+  }
+
+  async getViewportHeight(): Promise<number> {
+    return 1000;
+  }
+
+  async scrollBy(_dy: number): Promise<boolean> {
+    return true;
+  }
+}
+
+function makeSnapshot(
+  url: string,
+  elements: Snapshot['elements'],
+  extra: Partial<Snapshot> = {}
+): Snapshot {
+  return {
+    url,
+    title: 'Test Page',
+    elements,
+    ...extra,
+  };
+}
+
+describe('PlannerExecutorAgent parity', () => {
+  it('skips execution when pre-step verification already passes', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'CLICK',
+        intent: 'checkout',
+        input: 'Checkout',
+        verify: [{ predicate: 'url_contains', args: ['/cart'] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'already satisfied' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(1)']);
+    const runtime = new RuntimeStub('https://shop.test/cart', () =>
+      makeSnapshot('https://shop.test/cart', [
+        { id: 1, role: 'button', text: 'Checkout', clickable: true, importance: 100 },
+      ])
+    );
+
+    const agent = new PlannerExecutorAgent({ planner, executor });
+    const result = await agent.runStepwise(runtime, { task: 'Go to checkout' });
+
+    expect(result.success).toBe(true);
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.SKIPPED);
+    expect(result.stepOutcomes[0].actionTaken).toBe('SKIPPED(pre_verification_passed)');
+    expect(runtime.clickCalls).toEqual([]);
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it('marks a step failed when post-action verification predicates do not pass', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'CLICK',
+        intent: 'checkout',
+        input: 'Checkout',
+        verify: [{ predicate: 'url_contains', args: ['/checkout'] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'stop' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(1)']);
+    const runtime = new RuntimeStub('https://shop.test/cart', () =>
+      makeSnapshot('https://shop.test/cart', [
+        { id: 1, role: 'button', text: 'Checkout', clickable: true, importance: 100 },
+      ])
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: { retry: { verifyTimeoutMs: 20, verifyPollMs: 1 } },
+    });
+    const result = await agent.runStepwise(runtime, { task: 'Go to checkout' });
+
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.FAILED);
+    expect(result.stepOutcomes[0].verificationPassed).toBe(false);
+  });
+
+  it('uses vision execution when snapshot requires vision and executor supports it', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({ action: 'CLICK', intent: 'continue', input: 'Continue' }),
+      JSON.stringify({ action: 'DONE', reasoning: 'done' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(7)'], { vision: true });
+    let clicked = false;
+    const runtime = new RuntimeStub(
+      'https://shop.test/canvas',
+      () =>
+        makeSnapshot(
+          clicked ? 'https://shop.test/after' : 'https://shop.test/canvas',
+          [{ id: 7, role: 'button', text: 'Continue', clickable: true, importance: 100 }],
+          { status: 'require_vision', screenshot: 'ZmFrZQ==' }
+        ),
+      {
+        onClick: id => {
+          if (id === 7) clicked = true;
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({ planner, executor });
+    const result = await agent.runStepwise(runtime, { task: 'Continue on canvas page' });
+
+    expect(result.success).toBe(true);
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.stepOutcomes[0].usedVision).toBe(true);
+    expect(executor.imageCalls).toHaveLength(1);
+    expect(runtime.clickCalls).toEqual([7]);
+  });
+
+  it('records checkpoints and recovers to the last known good URL after a failure', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({ action: 'CLICK', intent: 'open cart', input: 'Cart' }),
+      JSON.stringify({ action: 'CLICK', intent: 'broken action', input: 'Broken' }),
+      JSON.stringify({ action: 'DONE', reasoning: 'recovered' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(1)', 'CLICK(2)']);
+    const runtime = new RuntimeStub(
+      'https://shop.test/home',
+      rt => {
+        if (rt.currentUrl.includes('/cart')) {
+          return makeSnapshot('https://shop.test/cart', [
+            { id: 2, role: 'button', text: 'Broken', clickable: true, importance: 90 },
+          ]);
+        }
+        return makeSnapshot('https://shop.test/home', [
+          { id: 1, role: 'link', text: 'Cart', clickable: true, importance: 100 },
+        ]);
+      },
+      {
+        onClick: id => {
+          if (id === 1) {
+            runtime.currentUrl = 'https://shop.test/cart';
+            return;
+          }
+          if (id === 2) {
+            throw new Error('click failed');
+          }
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({ planner, executor });
+    const result = await agent.runStepwise(runtime, { task: 'Open cart and continue' });
+
+    expect(result.success).toBe(true);
+    expect(runtime.gotoCalls).toContain('https://shop.test/cart');
+  });
+
+  it('continues through add-to-cart drawer by clicking checkout control from modal integration', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({ action: 'CLICK', intent: 'add to cart button', input: 'Add to Cart' }),
+      JSON.stringify({ action: 'DONE', reasoning: 'checkout drawer handled' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(1)']);
+    let stage: 'product' | 'drawer' | 'checkout' = 'product';
+    const runtime = new RuntimeStub(
+      'https://shop.test/product',
+      () => {
+        if (stage === 'drawer') {
+          return makeSnapshot('https://shop.test/product', [
+            { id: 1, role: 'button', text: 'Add to Cart', clickable: true, importance: 100 },
+            {
+              id: 9,
+              role: 'button',
+              text: 'Proceed to Checkout',
+              clickable: true,
+              importance: 110,
+            },
+            { id: 10, role: 'button', text: 'No Thanks', clickable: true, importance: 80 },
+            { id: 11, role: 'text', text: 'Added to cart', importance: 20 },
+            { id: 12, role: 'text', text: 'Subtotal', importance: 20 },
+            { id: 13, role: 'text', text: 'Protection plan', importance: 20 },
+            { id: 14, role: 'text', text: 'Drawer footer', importance: 20 },
+          ]);
+        }
+        if (stage === 'checkout') {
+          return makeSnapshot('https://shop.test/checkout', [
+            { id: 20, role: 'heading', text: 'Checkout', importance: 100 },
+          ]);
+        }
+        return makeSnapshot('https://shop.test/product', [
+          { id: 1, role: 'button', text: 'Add to Cart', clickable: true, importance: 100 },
+          { id: 2, role: 'text', text: 'Product Title', importance: 50 },
+        ]);
+      },
+      {
+        onClick: id => {
+          if (id === 1) {
+            stage = 'drawer';
+            return;
+          }
+          if (id === 9) {
+            stage = 'checkout';
+            runtime.currentUrl = 'https://shop.test/checkout';
+          }
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({ planner, executor });
+    const result = await agent.runStepwise(runtime, { task: 'Add item to cart and continue' });
+
+    expect(result.success).toBe(true);
+    expect(runtime.clickCalls).toEqual([1, 9]);
+    expect(runtime.currentUrl).toContain('/checkout');
+  });
+
+  it('treats authentication boundaries as graceful success states', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({ action: 'CLICK', intent: 'sign in button', input: 'Sign In' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(5)']);
+    const runtime = new RuntimeStub(
+      'https://shop.test/ap/signin',
+      () =>
+        makeSnapshot('https://shop.test/ap/signin', [
+          { id: 5, role: 'button', text: 'Sign In', clickable: true, importance: 100 },
+        ]),
+      {
+        onClick: () => {
+          throw new Error('credentials required');
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({ planner, executor });
+    const result = await agent.runStepwise(runtime, { task: 'Continue checkout' });
+
+    expect(result.success).toBe(true);
+    expect(result.error).toContain('authentication boundary');
+  });
+});

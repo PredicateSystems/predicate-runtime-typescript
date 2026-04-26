@@ -139,6 +139,7 @@ export interface TraceEventData {
   step_index?: number;
   attempt?: number;
   step_id?: string;
+  details?: Record<string, unknown>;
 
   // Snapshot data
   url?: string;
@@ -189,7 +190,6 @@ export interface TraceEventData {
   passed?: boolean;
   required?: boolean;
   reason?: string;
-  details?: Record<string, unknown>;
 }
 
 /**

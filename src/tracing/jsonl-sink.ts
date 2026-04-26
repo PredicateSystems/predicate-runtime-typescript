@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TraceSink } from './sink';
 import { TraceEvent, TraceStats } from './types';
+import { writeTraceIndex } from './indexer';
 
 /**
  * JsonlTraceSink writes trace events to a JSONL file (one JSON object per line)
@@ -163,8 +164,6 @@ export class JsonlTraceSink extends TraceSink {
    */
   private generateIndex(): void {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { writeTraceIndex } = require('./indexer');
       // Use frontend format to ensure 'step' field is present (1-based)
       // Frontend derives sequence from step.step - 1, so step must be valid
       const indexPath = this.path.replace(/\.jsonl$/, '.index.json');

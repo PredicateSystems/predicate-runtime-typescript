@@ -152,7 +152,6 @@ function escapeRegex(str: string): string {
  */
 function isGlobalNavCartLink(element: SnapshotElement): boolean {
   const text = (element.text || '').toLowerCase();
-  const ariaLabel = (element.ariaLabel || '').toLowerCase();
   const href = (element.href || '').toLowerCase();
 
   // Skip if it's a small cart count indicator
@@ -353,4 +352,22 @@ export function detectModalDismissed(
     }
   }
   return removedElements.size >= minRemovedElements;
+}
+
+export function shouldAutoContinueCheckoutFlow(intent?: string | null): boolean {
+  const normalized = (intent || '').toLowerCase().replace(/[_-]+/g, ' ');
+  if (!normalized) {
+    return false;
+  }
+
+  return [
+    'add to cart',
+    'add to bag',
+    'add to basket',
+    'buy now',
+    'checkout',
+    'check out',
+    'place order',
+    'review order',
+  ].some(pattern => normalized.includes(pattern));
 }

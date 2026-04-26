@@ -49,6 +49,72 @@ describe('Screenshot Extraction and Upload', () => {
     }
   });
 
+  describe('close(false)', () => {
+    it('waits for the upload path when the returned promise is awaited', async () => {
+      const sink = new CloudTraceSink(uploadUrl, runId);
+      let uploadFinished = false;
+
+      const uploadPromise = new Promise<void>(resolve => {
+        setTimeout(() => {
+          uploadFinished = true;
+          resolve();
+        }, 20);
+      });
+
+      const uploadSpy = jest
+        .spyOn(sink as any, '_doUpload')
+        .mockImplementation(() => uploadPromise);
+
+      const closePromise = sink.close(false);
+
+      expect(uploadFinished).toBe(false);
+
+      await closePromise;
+
+      expect(uploadFinished).toBe(true);
+      expect(uploadSpy).toHaveBeenCalledTimes(1);
+
+      uploadSpy.mockRestore();
+    });
+
+    it('still logs upload failures outside the Jest suppression path', async () => {
+      const sink = new CloudTraceSink(uploadUrl, runId);
+      const originalWorkerId = process.env.JEST_WORKER_ID;
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      delete process.env.JEST_WORKER_ID;
+      sink.emit({
+        v: 1,
+        type: 'action',
+        ts: '2026-01-01T00:00:00.000Z',
+        run_id: runId,
+        seq: 1,
+        data: {
+          action: 'click',
+          element_id: 123,
+        },
+      });
+
+      const uploadSpy = jest.spyOn(sink as any, '_uploadToCloud').mockResolvedValue(500);
+
+      try {
+        await sink.close(false);
+        expect(consoleErrorSpy).toHaveBeenCalledWith('❌ [Sentience] Upload failed: HTTP 500');
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Local trace preserved at:')
+        );
+      } finally {
+        if (originalWorkerId === undefined) {
+          delete process.env.JEST_WORKER_ID;
+        } else {
+          process.env.JEST_WORKER_ID = originalWorkerId;
+        }
+        consoleErrorSpy.mockRestore();
+        uploadSpy.mockRestore();
+      }
+    });
+  });
+
   describe('_extractScreenshotsFromTrace', () => {
     it('should extract screenshots from trace events', async () => {
       const sink = new CloudTraceSink(uploadUrl, runId);

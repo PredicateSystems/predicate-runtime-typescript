@@ -73,3 +73,30 @@ export function patchExampleDotCom(page: Page): void {
     });
   });
 }
+
+const SEARCH_RESULTS_HTML = `<!doctype html>
+<html>
+  <head><meta charset="utf-8" /></head>
+  <body>
+    <form role="search">
+      <input aria-label="Search" type="search" value="" />
+      <button type="submit">Search</button>
+    </form>
+    <main>
+      <a href="https://example.com/result">Sentience SDK Result</a>
+    </main>
+  </body>
+</html>`;
+
+export function patchSearchEnginePages(page: Page): void {
+  void page.route(
+    /https?:\/\/(duckduckgo\.com|www\.google\.com|www\.bing\.com)\/.*/,
+    async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: SEARCH_RESULTS_HTML,
+      });
+    }
+  );
+}

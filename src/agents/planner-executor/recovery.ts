@@ -14,6 +14,9 @@
  * 4. If recovery succeeds, resume from checkpoint step
  */
 
+import type { PredicateSpec, Snapshot } from './plan-models';
+import { evaluatePredicates } from './predicates';
+
 /**
  * Configuration for recovery navigation.
  */
@@ -55,6 +58,68 @@ export interface RecoveryCheckpoint {
   timestamp: Date;
   /** Labels of predicates that passed at this checkpoint */
   predicatesPassed: string[];
+  /** Structured predicate specs preserved for recovery verification */
+  verificationPredicates?: PredicateSpec[];
+}
+
+function normalizeRecoveryUrl(url: string): string {
+  return (url || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function splitRecoveryArgs(rawArgs: string): string[] {
+  return rawArgs
+    .split(',')
+    .map(arg => arg.trim())
+    .filter(Boolean)
+    .map(arg => arg.replace(/^['"]|['"]$/g, ''));
+}
+
+function parseRecoveryPredicate(label: string): PredicateSpec | null {
+  const trimmed = (label || '').trim();
+  const match = trimmed.match(/^([a-z_]+)\((.*)\)$/i);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    predicate: match[1].toLowerCase(),
+    args: splitRecoveryArgs(match[2]),
+  };
+}
+
+export function recoveryUrlsMatch(expectedUrl: string, actualUrl: string): boolean {
+  const expected = normalizeRecoveryUrl(expectedUrl);
+  const actual = normalizeRecoveryUrl(actualUrl);
+  if (!expected || !actual) {
+    return false;
+  }
+
+  return actual.includes(expected) || expected.includes(actual);
+}
+
+export function verifyRecoveryCheckpoint(
+  checkpoint: RecoveryCheckpoint,
+  snapshot: Snapshot | null
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+
+  if (!recoveryUrlsMatch(checkpoint.url, snapshot.url || '')) {
+    return false;
+  }
+
+  const predicateSpecs =
+    Array.isArray(checkpoint.verificationPredicates) && checkpoint.verificationPredicates.length > 0
+      ? checkpoint.verificationPredicates
+      : checkpoint.predicatesPassed
+          .map(parseRecoveryPredicate)
+          .filter((value): value is PredicateSpec => value !== null);
+  if (predicateSpecs.length === 0) {
+    return true;
+  }
+
+  return evaluatePredicates(predicateSpecs, snapshot);
 }
 
 /**
@@ -117,6 +182,9 @@ export class RecoveryState {
       ...data,
       timestamp: new Date(),
       predicatesPassed: data.predicatesPassed || [],
+      verificationPredicates: Array.isArray(data.verificationPredicates)
+        ? JSON.parse(JSON.stringify(data.verificationPredicates))
+        : [],
     };
 
     this.checkpoints.push(checkpoint);

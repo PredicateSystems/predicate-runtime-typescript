@@ -1,3 +1,10 @@
+import type { RecoveryNavigationConfig } from './recovery';
+import { DEFAULT_RECOVERY_CONFIG } from './recovery';
+import type { ModalDismissalConfig } from './modal-dismissal';
+import { DEFAULT_MODAL_CONFIG } from './modal-dismissal';
+import type { AuthBoundaryConfig } from './boundary-detection';
+import { DEFAULT_AUTH_BOUNDARY_CONFIG } from './boundary-detection';
+
 /**
  * PlannerExecutorAgent Configuration
  *
@@ -43,6 +50,12 @@ export interface SnapshotEscalationConfig {
   scrollViewportFraction: number;
   /** Stabilization delay after scroll in ms (default: 300) */
   scrollStabilizeMs: number;
+  /** Whether category-specific pruning is enabled for compact context (default: true) */
+  pruningEnabled: boolean;
+  /** Minimum retained elements before pruning relaxes automatically (default: 3) */
+  pruningMinElements: number;
+  /** Maximum pruning relaxation level before falling back to generic context (default: 2) */
+  pruningMaxRelaxation: number;
 }
 
 /**
@@ -101,6 +114,15 @@ export interface PlannerExecutorConfig {
   /** Whether to check predicates before step execution (default: true) */
   preStepVerification: boolean;
 
+  /** Recovery navigation settings */
+  recovery: RecoveryNavigationConfig;
+
+  /** Automatic modal/drawer dismissal settings */
+  modal: ModalDismissalConfig;
+
+  /** Authentication boundary detection settings */
+  authBoundary: AuthBoundaryConfig;
+
   /** Whether to enable verbose logging (default: false) */
   verbose: boolean;
 }
@@ -121,6 +143,9 @@ export const DEFAULT_CONFIG: PlannerExecutorConfig = {
     scrollDirections: ['down', 'up'],
     scrollViewportFraction: 0.4,
     scrollStabilizeMs: 300,
+    pruningEnabled: true,
+    pruningMinElements: 3,
+    pruningMaxRelaxation: 2,
   },
   retry: {
     verifyTimeoutMs: 10000,
@@ -139,6 +164,9 @@ export const DEFAULT_CONFIG: PlannerExecutorConfig = {
   executorMaxTokens: 96,
   executorTemperature: 0.0,
   preStepVerification: true,
+  recovery: { ...DEFAULT_RECOVERY_CONFIG },
+  modal: { ...DEFAULT_MODAL_CONFIG },
+  authBoundary: { ...DEFAULT_AUTH_BOUNDARY_CONFIG },
   verbose: false,
 };
 
@@ -296,6 +324,22 @@ export function mergeConfig(partial: DeepPartial<PlannerExecutorConfig>): Planne
     scrollDirections: (partial.snapshot?.scrollDirections ??
       DEFAULT_CONFIG.snapshot.scrollDirections) as Array<'up' | 'down'>,
   };
+  const modal: ModalDismissalConfig = {
+    ...DEFAULT_CONFIG.modal,
+    ...(partial.modal ?? {}),
+    roleFilter: (partial.modal?.roleFilter ?? DEFAULT_CONFIG.modal.roleFilter) as string[],
+    dismissPatterns: (partial.modal?.dismissPatterns ??
+      DEFAULT_CONFIG.modal.dismissPatterns) as string[],
+    iconPatterns: (partial.modal?.iconPatterns ?? DEFAULT_CONFIG.modal.iconPatterns) as string[],
+    checkoutPatterns: (partial.modal?.checkoutPatterns ??
+      DEFAULT_CONFIG.modal.checkoutPatterns) as string[],
+  };
+  const authBoundary: AuthBoundaryConfig = {
+    ...DEFAULT_CONFIG.authBoundary,
+    ...(partial.authBoundary ?? {}),
+    urlPatterns: (partial.authBoundary?.urlPatterns ??
+      DEFAULT_CONFIG.authBoundary.urlPatterns) as string[],
+  };
 
   return {
     ...DEFAULT_CONFIG,
@@ -303,5 +347,8 @@ export function mergeConfig(partial: DeepPartial<PlannerExecutorConfig>): Planne
     snapshot,
     retry: { ...DEFAULT_CONFIG.retry, ...(partial.retry ?? {}) },
     stepwise: { ...DEFAULT_CONFIG.stepwise, ...(partial.stepwise ?? {}) },
+    recovery: { ...DEFAULT_CONFIG.recovery, ...(partial.recovery ?? {}) },
+    modal,
+    authBoundary,
   };
 }

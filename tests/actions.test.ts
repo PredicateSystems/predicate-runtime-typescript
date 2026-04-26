@@ -23,7 +23,12 @@ import {
   uncheck,
   uploadFile,
 } from '../src';
-import { createTestBrowser, getPageOrThrow, patchExampleDotCom } from './test-utils';
+import {
+  createTestBrowser,
+  getPageOrThrow,
+  patchExampleDotCom,
+  patchSearchEnginePages,
+} from './test-utils';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -178,13 +183,21 @@ describe('Actions', () => {
         await page.goto('https://example.com');
         await page.waitForLoadState('networkidle', { timeout: 10000 });
 
+        patchSearchEnginePages(page);
+
         const result = await search(browser, 'sentience sdk', 'duckduckgo');
         expect(result.success).toBe(true);
         expect(result.duration_ms).toBeGreaterThan(0);
+        expect(page.url()).toBe('https://duckduckgo.com/?q=sentience+sdk');
 
         expect((await search(browser, 'sentience sdk', 'google')).success).toBe(true);
+        expect(page.url()).toBe('https://www.google.com/search?q=sentience+sdk');
+
         expect((await search(browser, 'sentience sdk', 'bing')).success).toBe(true);
+        expect(page.url()).toBe('https://www.bing.com/search?q=sentience+sdk');
+
         expect((await search(browser, 'sentience sdk', 'google.com')).success).toBe(true);
+        expect(page.url()).toBe('https://www.google.com/search?q=sentience+sdk');
       } finally {
         await browser.close();
       }
