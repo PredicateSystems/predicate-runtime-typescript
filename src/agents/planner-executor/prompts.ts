@@ -162,7 +162,8 @@ CRITICAL - AVOID these fields (they are NOT search boxes):
 - Fields with 'email', 'newsletter', 'subscribe', 'signup' in the text
 - Fields labeled 'Your email address', 'Email', 'Enter your email'
 - Fields in footer/newsletter sections
-ONLY use fields explicitly labeled for SEARCH (placeholder='Search', aria='Search').
+Treat searchbox/combobox roles as valid search inputs.
+Accept search labels such as 'Search', 'Search Amazon', 'Search products', 'Search store', or similar search-specific wording in text, placeholder, name, or aria-label.
 If NO search field exists, return NONE instead of guessing.
 If you output anything else, the action fails.
 Do NOT output <think> or any reasoning.
@@ -207,6 +208,7 @@ Do NOT output <think> or any reasoning.
 CRITICAL: Find an element with text matching '${targetText}'.
 - Look for: product titles, category names, link text, button labels
 - Text must contain the target words (case-insensitive partial match is OK)
+- If multiple elements match, choose the one with the strongest text overlap and the most specific visible label
 - If NO element contains the target text, return NONE instead of clicking something random
 Output: CLICK(<digits>) or NONE
 Example: CLICK(42) or NONE`;

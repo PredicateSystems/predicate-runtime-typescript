@@ -40,49 +40,81 @@ export function parseAction(text: string): ParsedAction {
     return { action: 'NONE', args: ['empty response after stripping think tags'] };
   }
 
-  // Strip common prefixes (bullets, dashes, asterisks)
-  cleaned = cleaned.replace(/^[-*•]\s*/, '');
+  const directMatch = parseExactActionLine(cleaned);
+  if (directMatch) {
+    return directMatch;
+  }
 
+  const actionLines = cleaned
+    .split(/\r?\n/)
+    .map(normalizeActionCandidateLine)
+    .filter((line): line is string => line !== null)
+    .map(parseExactActionLine)
+    .filter((line): line is ParsedAction => line !== null);
+
+  if (actionLines.length === 1) {
+    return actionLines[0];
+  }
+
+  return { action: 'UNKNOWN', args: [text] };
+}
+
+function normalizeActionCandidateLine(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || /^```/.test(trimmed)) {
+    return null;
+  }
+
+  const withoutBullet = trimmed.replace(/^[-*•]\s*/, '');
+  const withoutLabel = withoutBullet.replace(
+    /^(?:final\s+action|action|output|answer|return)\s*:\s*/i,
+    ''
+  );
+
+  return withoutLabel.trim() || null;
+}
+
+function parseExactActionLine(line: string): ParsedAction | null {
   // CLICK(<id>)
-  const clickMatch = cleaned.match(/CLICK\((\d+)\)/);
+  const clickMatch = line.match(/^CLICK\((\d+)\)$/);
   if (clickMatch) {
     return { action: 'CLICK', args: [parseInt(clickMatch[1], 10)] };
   }
 
   // TYPE(<id>, "text") - also handle without quotes
-  const typeMatch = cleaned.match(/TYPE\((\d+),\s*["']?([^"']+?)["']?\)/);
+  const typeMatch = line.match(/^TYPE\((\d+),\s*["']?([^"']+?)["']?\)$/);
   if (typeMatch) {
     return { action: 'TYPE', args: [parseInt(typeMatch[1], 10), typeMatch[2].trim()] };
   }
 
   // PRESS('key')
-  const pressMatch = cleaned.match(/PRESS\(['"]?(.+?)['"]?\)/);
+  const pressMatch = line.match(/^PRESS\(['"]?(.+?)['"]?\)$/);
   if (pressMatch) {
     return { action: 'PRESS', args: [pressMatch[1]] };
   }
 
   // SCROLL(direction)
-  const scrollMatch = cleaned.match(/SCROLL\((\w+)\)/);
+  const scrollMatch = line.match(/^SCROLL\((\w+)\)$/);
   if (scrollMatch) {
     return { action: 'SCROLL', args: [scrollMatch[1]] };
   }
 
   // FINISH()
-  if (cleaned.includes('FINISH')) {
+  if (line === 'FINISH()') {
     return { action: 'FINISH', args: [] };
   }
 
   // DONE
-  if (cleaned.toUpperCase().includes('DONE')) {
+  if (line.toUpperCase() === 'DONE') {
     return { action: 'DONE', args: [] };
   }
 
   // NONE - executor couldn't find a suitable element
-  if (cleaned.toUpperCase() === 'NONE' || cleaned.toUpperCase().includes('NONE')) {
+  if (line.toUpperCase() === 'NONE') {
     return { action: 'NONE', args: [] };
   }
 
-  return { action: 'UNKNOWN', args: [text] };
+  return null;
 }
 
 // ---------------------------------------------------------------------------

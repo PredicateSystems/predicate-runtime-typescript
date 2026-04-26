@@ -36,7 +36,9 @@ export class HeuristicHint {
       return false;
     }
 
-    return intent.toLowerCase().includes(this.intentPattern.toLowerCase());
+    const normalizedIntent = this.normalizeIntent(intent);
+    const normalizedPattern = this.normalizeIntent(this.intentPattern);
+    return normalizedIntent.includes(normalizedPattern);
   }
 
   matchesElement(element: SnapshotElement): boolean {
@@ -87,5 +89,12 @@ export class HeuristicHint {
 
     const attributes = element.attributes ?? {};
     return attributes[attributeName] ?? '';
+  }
+
+  private normalizeIntent(value: string): string {
+    return value
+      .toLowerCase()
+      .trim()
+      .replace(/[\s-]+/g, '_');
   }
 }

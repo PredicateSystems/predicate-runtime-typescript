@@ -147,7 +147,11 @@ export class ComposableHeuristics implements IntentHeuristics {
           ['submit', 'next', 'continue', 'save', 'update']
         );
       case TaskCategory.SEARCH:
-        return this.matchKeywordElements(elements, ['button', 'textbox'], ['search', 'find', 'go']);
+        return this.matchKeywordElements(
+          elements,
+          ['button', 'textbox', 'searchbox', 'combobox'],
+          ['search', 'find', 'go']
+        );
       case TaskCategory.NAVIGATION:
         return this.matchKeywordElements(elements, ['link'], []);
       default:

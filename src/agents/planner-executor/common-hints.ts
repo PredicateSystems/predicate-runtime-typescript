@@ -28,7 +28,7 @@ export const COMMON_HINTS = {
   search: new HeuristicHint({
     intentPattern: 'search',
     textPatterns: ['search', 'find', 'go'],
-    roleFilter: ['button', 'textbox'],
+    roleFilter: ['button', 'textbox', 'searchbox', 'combobox'],
     priority: 5,
   }),
   close: new HeuristicHint({

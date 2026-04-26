@@ -46,6 +46,19 @@ describe('HeuristicHint', () => {
     expect(hint.matchesIntent('checkout')).toBe(false);
   });
 
+  it('normalizes separators when matching planner intents', () => {
+    const hint = new HeuristicHint({
+      intentPattern: 'product_link',
+      textPatterns: ['wireless earbuds'],
+      roleFilter: ['link'],
+      priority: 10,
+    });
+
+    expect(hint.matchesIntent('product link')).toBe(true);
+    expect(hint.matchesIntent('product-link')).toBe(true);
+    expect(hint.matchesIntent('PRODUCT_LINK')).toBe(true);
+  });
+
   it('matches elements by role, text, and attribute patterns', () => {
     const hint = new HeuristicHint({
       intentPattern: 'product_link',
@@ -125,6 +138,39 @@ describe('ComposableHeuristics', () => {
     expect(
       heuristics.findElementForIntent('checkout', elements, 'https://shop.test/cart', 'Checkout')
     ).toBe(10);
+  });
+
+  it('treats searchbox and combobox fields as first-class search inputs', () => {
+    const heuristics = new ComposableHeuristics({
+      staticHeuristics: new StaticHeuristicsStub(null),
+      taskCategory: TaskCategory.SEARCH,
+    });
+
+    const searchboxElements = [
+      makeElement(12, { text: 'Search Amazon', role: 'searchbox' }),
+      makeElement(13, { text: 'Sign in', role: 'button' }),
+    ];
+    const comboboxElements = [
+      makeElement(21, { text: 'Search products', role: 'combobox' }),
+      makeElement(22, { text: 'Search', role: 'button' }),
+    ];
+
+    expect(
+      heuristics.findElementForIntent(
+        'searchbox',
+        searchboxElements,
+        'https://shop.test',
+        'Search for headphones'
+      )
+    ).toBe(12);
+    expect(
+      heuristics.findElementForIntent(
+        'searchbox',
+        comboboxElements,
+        'https://shop.test',
+        'Search for headphones'
+      )
+    ).toBe(21);
   });
 
   it('falls back to static heuristics before task-category defaults', () => {
