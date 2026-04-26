@@ -183,7 +183,7 @@ describe('Actions', () => {
         await page.goto('https://example.com');
         await page.waitForLoadState('networkidle', { timeout: 10000 });
 
-        patchSearchEnginePages(page);
+        await patchSearchEnginePages(page);
 
         const result = await search(browser, 'sentience sdk', 'duckduckgo');
         expect(result.success).toBe(true);
@@ -233,7 +233,7 @@ describe('Actions', () => {
       try {
         await browser.start();
         const page = getPageOrThrow(browser);
-        patchExampleDotCom(page);
+        await patchExampleDotCom(page);
         await page.goto('https://example.com');
 
         await expect(search(browser, 'sentience sdk', 'duckduckgo')).rejects.toThrow(

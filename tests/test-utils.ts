@@ -15,7 +15,7 @@ export async function createTestBrowser(headless?: boolean): Promise<SentienceBr
     await browser.start();
     const page = browser.getPage();
     if (page) {
-      patchExampleDotCom(page);
+      await patchExampleDotCom(page);
     }
     return browser;
   } catch (e: any) {
@@ -64,8 +64,8 @@ export async function setTestPageContent(page: Page, html?: string): Promise<voi
   await page.setContent(html ?? DEFAULT_TEST_HTML, { waitUntil: 'domcontentloaded' });
 }
 
-export function patchExampleDotCom(page: Page): void {
-  void page.route(/https?:\/\/example\.com\/?.*/, async route => {
+export async function patchExampleDotCom(page: Page): Promise<void> {
+  await page.route(/https?:\/\/example\.com\/?.*/, async route => {
     await route.fulfill({
       status: 200,
       contentType: 'text/html',
@@ -88,8 +88,8 @@ const SEARCH_RESULTS_HTML = `<!doctype html>
   </body>
 </html>`;
 
-export function patchSearchEnginePages(page: Page): void {
-  void page.route(
+export async function patchSearchEnginePages(page: Page): Promise<void> {
+  await page.route(
     /https?:\/\/(duckduckgo\.com|www\.google\.com|www\.bing\.com)\/.*/,
     async route => {
       await route.fulfill({

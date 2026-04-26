@@ -229,7 +229,7 @@ describe('Browser Proxy Support', () => {
         if (!page) {
           throw new Error('Browser page is not available');
         }
-        patchExampleDotCom(page);
+        await patchExampleDotCom(page);
         await page.goto('https://example.com', { waitUntil: 'domcontentloaded', timeout: 20000 });
 
         const viewportSize = await page.evaluate(() => ({
@@ -295,7 +295,7 @@ describe('Browser Proxy Support', () => {
         expect(sentienceBrowser.getContext()).toBe(context);
 
         // Test that we can use it
-        patchExampleDotCom(page);
+        await patchExampleDotCom(page);
         await page.goto('https://example.com');
         await page.waitForLoadState('networkidle', { timeout: 10000 });
 
