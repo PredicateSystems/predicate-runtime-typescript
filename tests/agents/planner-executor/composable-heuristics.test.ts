@@ -173,6 +173,56 @@ describe('ComposableHeuristics', () => {
     ).toBe(21);
   });
 
+  it('matches a searchbox role even when the visible text is an implementation name', () => {
+    const heuristics = new ComposableHeuristics({
+      staticHeuristics: new StaticHeuristicsStub(null),
+      taskCategory: TaskCategory.SEARCH,
+    });
+
+    const elements = [
+      makeElement(31, { text: 'field-keywords', role: 'searchbox' }),
+      makeElement(32, { text: 'Sign in', role: 'button' }),
+    ];
+
+    expect(
+      heuristics.findElementForIntent(
+        'searchbox',
+        elements,
+        'https://www.amazon.com/',
+        'Search for noise canceling earbuds'
+      )
+    ).toBe(31);
+  });
+
+  it('matches Amazon product card intents to real product detail links', () => {
+    const heuristics = new ComposableHeuristics({
+      staticHeuristics: new StaticHeuristicsStub(null),
+      taskCategory: TaskCategory.SEARCH,
+    });
+
+    const elements = [
+      makeElement(41, {
+        text: 'Sponsored banner',
+        role: 'link',
+        href: '/gp/help/customer/display.html',
+      }),
+      makeElement(42, {
+        text: 'Wireless Noise Canceling Earbuds with Charging Case',
+        role: 'link',
+        href: '/dp/B0TEST1234/ref=sr_1_1',
+      }),
+    ];
+
+    expect(
+      heuristics.findElementForIntent(
+        'product_card',
+        elements,
+        'https://www.amazon.com/s?k=noise+canceling+earbuds',
+        'Pick an earbuds product'
+      )
+    ).toBe(42);
+  });
+
   it('falls back to static heuristics before task-category defaults', () => {
     const heuristics = new ComposableHeuristics({
       staticHeuristics: new StaticHeuristicsStub(42, ['custom_fallback']),

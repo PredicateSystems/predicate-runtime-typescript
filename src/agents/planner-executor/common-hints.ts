@@ -13,6 +13,12 @@ export const COMMON_HINTS = {
     roleFilter: ['button', 'link'],
     priority: 10,
   }),
+  product_card: new HeuristicHint({
+    intentPattern: 'product_card',
+    roleFilter: ['link'],
+    priority: 8,
+    attributePatterns: { href: '/dp/' },
+  }),
   login: new HeuristicHint({
     intentPattern: 'login',
     textPatterns: ['log in', 'login', 'sign in', 'signin'],
@@ -30,6 +36,11 @@ export const COMMON_HINTS = {
     textPatterns: ['search', 'find', 'go'],
     roleFilter: ['button', 'textbox', 'searchbox', 'combobox'],
     priority: 5,
+  }),
+  searchbox: new HeuristicHint({
+    intentPattern: 'searchbox',
+    roleFilter: ['searchbox'],
+    priority: 9,
   }),
   close: new HeuristicHint({
     intentPattern: 'close',

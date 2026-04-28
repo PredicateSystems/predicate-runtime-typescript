@@ -6,6 +6,7 @@
  *
  * Supported predicates:
  * - url_contains: Check if URL contains a substring
+ * - url_equals: Check if URL equals a target URL
  * - url_matches: Check if URL matches a regex pattern
  * - exists: Check if element with text/selector exists
  * - not_exists: Check if element does not exist
@@ -38,11 +39,15 @@ export interface Predicate {
  * Check if URL contains a substring.
  */
 export function urlContains(substring: string): Predicate {
+  const needle = substring.trim();
   return {
     name: 'url_contains',
     evaluate(snapshot: Snapshot): boolean {
+      if (!needle) {
+        return false;
+      }
       const url = snapshot.url || '';
-      return url.toLowerCase().includes(substring.toLowerCase());
+      return url.toLowerCase().includes(needle.toLowerCase());
     },
   };
 }
@@ -64,6 +69,36 @@ export function urlMatches(pattern: string): Predicate {
       }
     },
   };
+}
+
+/**
+ * Check if URL equals a target URL, ignoring trailing slash differences.
+ */
+export function urlEquals(targetUrl: string): Predicate {
+  const target = normalizeUrlForEquality(targetUrl);
+  return {
+    name: 'url_equals',
+    evaluate(snapshot: Snapshot): boolean {
+      if (!target) {
+        return false;
+      }
+      return normalizeUrlForEquality(snapshot.url || '') === target;
+    },
+  };
+}
+
+function normalizeUrlForEquality(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return '';
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '').toLowerCase();
+  } catch {
+    return trimmed.replace(/\/$/, '').toLowerCase();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +232,9 @@ export function buildPredicate(spec: PredicateSpec): Predicate {
     case 'url_contains':
       return urlContains(String(args[0] || ''));
 
+    case 'url_equals':
+      return urlEquals(String(args[0] || ''));
+
     case 'url_matches':
       return urlMatches(String(args[0] || ''));
 
@@ -220,11 +258,11 @@ export function buildPredicate(spec: PredicateSpec): Predicate {
       return allOf(...(args as PredicateSpec[]).map(buildPredicate));
 
     default:
-      // Unknown predicate - always passes (lenient)
+      // Unknown predicates must fail closed so pre-step verification cannot skip real work.
       return {
         name: `unknown:${name}`,
         evaluate(): boolean {
-          return true;
+          return false;
         },
       };
   }

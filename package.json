@@ -4,8 +4,20 @@
   "description": "TypeScript SDK for Sentience AI Agent Browser Automation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./browser-agent": {
+      "types": "./dist/browser-agent.d.ts",
+      "import": "./dist/esm/browser-agent.js",
+      "require": "./dist/browser-agent.js",
+      "default": "./dist/browser-agent.js"
+    }
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.esm.json",
     "test": "jest",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",

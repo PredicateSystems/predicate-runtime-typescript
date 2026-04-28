@@ -289,7 +289,8 @@ export function isSearchLikeTypeAndSubmit(
   step: { action?: string; intent?: string; input?: string; verify?: PredicateSpec[] },
   element?: Pick<SnapshotElement, 'role' | 'text' | 'name' | 'ariaLabel'> | null
 ): boolean {
-  if ((step.action || '').toUpperCase() !== 'TYPE_AND_SUBMIT') {
+  const action = (step.action || '').toUpperCase();
+  if (action !== 'TYPE_AND_SUBMIT' && action !== 'TYPE') {
     return false;
   }
 

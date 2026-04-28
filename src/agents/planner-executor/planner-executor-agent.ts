@@ -1434,12 +1434,16 @@ export class PlannerExecutorAgent {
         const text = plannerAction.input || (parsed.args[1] as string) || '';
         await runtime.type(elementId, text);
 
-        // Submit with Enter key for TYPE_AND_SUBMIT
-        if (plannerAction.action === 'TYPE_AND_SUBMIT') {
+        const elements = activeCtx.snapshot?.elements || [];
+        const inputElement = elements.find(element => element.id === elementId) || null;
+        const isSearchLike = isSearchLikeTypeAndSubmit(plannerAction, inputElement);
+
+        // Submit with Enter key for TYPE_AND_SUBMIT, plus planner TYPE actions that clearly target search.
+        if (
+          plannerAction.action === 'TYPE_AND_SUBMIT' ||
+          (plannerAction.action === 'TYPE' && isSearchLike)
+        ) {
           const preUrl = await runtime.getCurrentUrl();
-          const elements = activeCtx.snapshot?.elements || [];
-          const inputElement = elements.find(element => element.id === elementId) || null;
-          const isSearchLike = isSearchLikeTypeAndSubmit(plannerAction, inputElement);
           const submitButtonId = this.findSubmitButton(elements, elementId, isSearchLike);
           const hasRetryBudget = this.config.retry.executorRepairAttempts > 0;
 
@@ -1911,6 +1915,23 @@ export class PlannerExecutorAgent {
 
     if (plannerAction.action === 'CLICK') {
       return { action: 'CLICK', args: [elementId] };
+    }
+
+    const matchedElement = ctx.snapshot.elements.find(element => element.id === elementId) || null;
+    if (
+      plannerAction.action === 'TYPE_AND_SUBMIT' &&
+      plannerAction.input &&
+      isSearchLikeTypeAndSubmit(plannerAction, matchedElement)
+    ) {
+      return { action: 'TYPE', args: [elementId, plannerAction.input] };
+    }
+
+    if (
+      plannerAction.action === 'TYPE' &&
+      plannerAction.input &&
+      isSearchLikeTypeAndSubmit(plannerAction, matchedElement)
+    ) {
+      return { action: 'TYPE', args: [elementId, plannerAction.input] };
     }
 
     return null;

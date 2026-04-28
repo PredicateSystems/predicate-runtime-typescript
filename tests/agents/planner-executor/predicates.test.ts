@@ -240,6 +240,21 @@ describe('Predicates', () => {
       expect(pred.evaluate(snapshot)).toBe(true);
     });
 
+    it('should fail empty url_contains predicates instead of matching every URL', () => {
+      const pred = buildPredicate({ predicate: 'url_contains', args: [''] });
+
+      expect(pred.name).toBe('url_contains');
+      expect(pred.evaluate(createSnapshot('https://example.com/'))).toBe(false);
+    });
+
+    it('should build url_equals predicate without pre-verifying a different URL', () => {
+      const pred = buildPredicate({ predicate: 'url_equals', args: ['https://www.amazon.com/'] });
+
+      expect(pred.name).toBe('url_equals');
+      expect(pred.evaluate(createSnapshot('https://example.com/'))).toBe(false);
+      expect(pred.evaluate(createSnapshot('https://www.amazon.com/'))).toBe(true);
+    });
+
     it('should build url_matches predicate', () => {
       const pred = buildPredicate({ predicate: 'url_matches', args: ['/dp/.*'] });
       const snapshot = createSnapshot('https://example.com/dp/123');
@@ -309,7 +324,7 @@ describe('Predicates', () => {
       const pred = buildPredicate({ predicate: 'unknown_predicate', args: ['foo'] });
 
       expect(pred.name).toBe('unknown:unknown_predicate');
-      expect(pred.evaluate(createSnapshot(''))).toBe(true); // Always passes
+      expect(pred.evaluate(createSnapshot(''))).toBe(false);
     });
   });
 

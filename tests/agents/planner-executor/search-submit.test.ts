@@ -207,6 +207,108 @@ describe('PlannerExecutorAgent search submission parity', () => {
     expect(runtime.currentUrl).toContain('/search');
   });
 
+  it('uses deterministic searchbox heuristics when the executor returns NONE for TYPE_AND_SUBMIT', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'TYPE_AND_SUBMIT',
+        intent: 'searchbox',
+        input: 'noise canceling earbuds',
+        verify: [{ predicate: 'url_contains', args: ['/s?k='] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'search submitted' }),
+    ]);
+    const executor = new ProviderStub(['NONE']);
+    const runtime = new RuntimeStub(
+      'https://www.amazon.com/',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          {
+            id: 10,
+            role: 'searchbox',
+            name: 'Search Amazon',
+            ariaLabel: 'Search Amazon',
+            text: 'field-keywords',
+            importance: 100,
+          },
+          { id: 11, role: 'button', text: 'Go', clickable: true, importance: 90 },
+        ]),
+      {
+        onPressKey: () => {
+          runtime.currentUrl = 'https://www.amazon.com/s?k=noise+canceling+earbuds';
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: {
+        retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 0, executorRepairAttempts: 1 },
+        recovery: { enabled: false },
+      },
+    });
+
+    const result = await agent.runStepwise(runtime, {
+      task: 'Search for noise canceling earbuds',
+    });
+
+    expect(result.success).toBe(true);
+    expect(runtime.typeCalls).toEqual([{ elementId: 10, text: 'noise canceling earbuds' }]);
+    expect(runtime.keyCalls).toEqual(['Enter']);
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it('uses deterministic searchbox heuristics for planner TYPE actions and submits search-like inputs', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'TYPE',
+        intent: 'searchbox',
+        input: 'noise canceling earbuds',
+        verify: [{ predicate: 'url_contains', args: ['/s?k='] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'search submitted' }),
+    ]);
+    const executor = new ProviderStub(['NONE']);
+    const runtime = new RuntimeStub(
+      'https://www.amazon.com/',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          {
+            id: 10,
+            role: 'searchbox',
+            name: 'Search Amazon',
+            ariaLabel: 'Search Amazon',
+            text: 'field-keywords',
+            importance: 100,
+          },
+          { id: 11, role: 'button', text: 'Go', clickable: true, importance: 90 },
+        ]),
+      {
+        onPressKey: () => {
+          runtime.currentUrl = 'https://www.amazon.com/s?k=noise+canceling+earbuds';
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: {
+        retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 0, executorRepairAttempts: 1 },
+        recovery: { enabled: false },
+      },
+    });
+
+    const result = await agent.runStepwise(runtime, {
+      task: 'Search for noise canceling earbuds',
+    });
+
+    expect(result.success).toBe(true);
+    expect(runtime.typeCalls).toEqual([{ elementId: 10, text: 'noise canceling earbuds' }]);
+    expect(runtime.keyCalls).toEqual(['Enter']);
+    expect(executor.calls).toHaveLength(0);
+  });
+
   it('does not retry submission when Enter satisfies verification without changing the URL', async () => {
     const planner = new ProviderStub([
       JSON.stringify({
