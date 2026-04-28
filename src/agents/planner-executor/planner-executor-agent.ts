@@ -1414,10 +1414,29 @@ export class PlannerExecutorAgent {
       const elementId = parsed.args[0] as number;
 
       if (parsed.action === 'CLICK') {
+        const targetElement =
+          activeCtx.snapshot?.elements.find(element => element.id === elementId) || null;
         await runtime.click(elementId);
         await this.handlePostClickEffects(runtime, plannerAction, activeCtx);
-        const verificationPassed = await this.verifyStepOutcome(runtime, plannerAction);
         const urlAfter = await runtime.getCurrentUrl();
+        const hasUrlVerification = (plannerAction.verify || []).some(
+          predicate =>
+            predicate.predicate === 'url_contains' ||
+            predicate.predicate === 'url_equals' ||
+            predicate.predicate === 'url_matches'
+        );
+        const relevantUrlChange = isUrlChangeRelevantToIntent(
+          currentUrl,
+          urlAfter,
+          plannerAction,
+          targetElement
+        );
+        const navigationSatisfied =
+          relevantUrlChange &&
+          (!hasUrlVerification ||
+            this.clickedHrefMatchesNavigation(currentUrl, urlAfter, targetElement));
+        const verificationPassed =
+          navigationSatisfied || (await this.verifyStepOutcome(runtime, plannerAction));
         return {
           stepId: stepNum,
           goal: plannerAction.intent || 'Click element',
@@ -1437,6 +1456,7 @@ export class PlannerExecutorAgent {
         const elements = activeCtx.snapshot?.elements || [];
         const inputElement = elements.find(element => element.id === elementId) || null;
         const isSearchLike = isSearchLikeTypeAndSubmit(plannerAction, inputElement);
+        let submissionSatisfied = false;
 
         // Submit with Enter key for TYPE_AND_SUBMIT, plus planner TYPE actions that clearly target search.
         if (
@@ -1448,7 +1468,6 @@ export class PlannerExecutorAgent {
           const hasRetryBudget = this.config.retry.executorRepairAttempts > 0;
 
           let changedUrl: string | null = null;
-          let submissionSatisfied = false;
 
           const checkSubmissionSatisfied = async (): Promise<boolean> => {
             if (
@@ -1535,7 +1554,8 @@ export class PlannerExecutorAgent {
           }
         }
 
-        const verificationPassed = await this.verifyStepOutcome(runtime, plannerAction);
+        const verificationPassed =
+          submissionSatisfied || (await this.verifyStepOutcome(runtime, plannerAction));
         const urlAfter = await runtime.getCurrentUrl();
 
         return {
@@ -2285,6 +2305,44 @@ export class PlannerExecutorAgent {
     }
 
     return false;
+  }
+
+  private clickedHrefMatchesNavigation(
+    previousUrl: string,
+    nextUrl: string,
+    element: SnapshotElement | null
+  ): boolean {
+    const href = element?.href?.trim();
+    if (!href) {
+      return false;
+    }
+
+    try {
+      const expected = new URL(href, previousUrl);
+      const actual = new URL(nextUrl, previousUrl);
+      if (
+        !['http:', 'https:'].includes(expected.protocol) ||
+        !['http:', 'https:'].includes(actual.protocol)
+      ) {
+        return false;
+      }
+
+      expected.hash = '';
+      actual.hash = '';
+      expected.search = '';
+      actual.search = '';
+
+      return (
+        this.normalizeNavigationUrl(expected.toString()) ===
+        this.normalizeNavigationUrl(actual.toString())
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private normalizeNavigationUrl(url: string): string {
+    return url.trim().replace(/\/+$/, '').toLowerCase();
   }
 
   private async isCartAdditionTerminal(
