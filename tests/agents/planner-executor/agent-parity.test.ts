@@ -203,6 +203,54 @@ describe('PlannerExecutorAgent parity', () => {
     expect(result.stepOutcomes[0].verificationPassed).toBe(false);
   });
 
+  it('treats a relevant click URL change as success when planner verification is too strict', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'CLICK',
+        intent: 'learn more link',
+        input: 'Learn more',
+        verify: [{ predicate: 'url_contains', args: ['/learn-more'] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'link opened' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(1)']);
+    const runtime = new RuntimeStub(
+      'https://example.com/',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          {
+            id: 1,
+            role: 'link',
+            text: 'Learn more',
+            href: 'https://www.iana.org/help/example-domains',
+            clickable: true,
+            importance: 100,
+          },
+        ]),
+      {
+        onClick: id => {
+          if (id === 1) {
+            runtime.currentUrl = 'https://www.iana.org/help/example-domains';
+          }
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: { retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 0 } },
+    });
+    const result = await agent.runStepwise(runtime, {
+      task: 'Find the Learn more link and click it',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.SUCCESS);
+    expect(result.stepOutcomes[0].verificationPassed).toBe(true);
+    expect(result.stepOutcomes[0].urlAfter).toBe('https://www.iana.org/help/example-domains');
+  });
+
   it('uses vision execution when snapshot requires vision and executor supports it', async () => {
     const planner = new ProviderStub([
       JSON.stringify({ action: 'CLICK', intent: 'continue', input: 'Continue' }),
