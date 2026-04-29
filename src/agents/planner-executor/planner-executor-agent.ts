@@ -892,6 +892,7 @@ export class PlannerExecutorAgent {
           }
         }
 
+        plannerAction = this.promoteVisibleResultClick(task, ctx, plannerAction);
         this.composableHeuristics.setStepHints(plannerAction.heuristicHints || []);
         this.emitPlannerAction(stepNum, plannerAction, plannerActionSource);
 
@@ -1179,6 +1180,20 @@ export class PlannerExecutorAgent {
           usedVision: false,
           durationMs: Date.now() - stepStart,
           error: 'NAVIGATE action is missing target URL',
+        };
+      }
+
+      if (this.isCopiedPlaceholderNavigation(plannerAction.target, currentUrl, task)) {
+        return {
+          stepId: stepNum,
+          goal: stepGoal,
+          status: StepStatus.SKIPPED,
+          actionTaken: 'SKIPPED(placeholder_navigation)',
+          verificationPassed: true,
+          usedVision: false,
+          durationMs: Date.now() - stepStart,
+          urlBefore: currentUrl,
+          urlAfter: currentUrl,
         };
       }
 
@@ -2073,6 +2088,127 @@ export class PlannerExecutorAgent {
         : [],
       reasoning: typeof step.reasoning === 'string' ? step.reasoning : undefined,
     };
+  }
+
+  private isCopiedPlaceholderNavigation(
+    targetUrl: string,
+    currentUrl: string,
+    task: string
+  ): boolean {
+    if (!this.isExampleDotComUrl(targetUrl)) {
+      return false;
+    }
+
+    if (this.isExampleDotComUrl(currentUrl) || /\bexample\.com\b/i.test(task)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private isExampleDotComUrl(url: string): boolean {
+    try {
+      const hostname = new URL(url).hostname.toLowerCase();
+      return hostname === 'example.com' || hostname.endsWith('.example.com');
+    } catch {
+      return false;
+    }
+  }
+
+  private promoteVisibleResultClick(
+    task: string,
+    ctx: SnapshotContext,
+    plannerAction: StepwisePlannerResponse
+  ): StepwisePlannerResponse {
+    if (plannerAction.action !== 'SCROLL' && plannerAction.action !== 'WAIT') {
+      return plannerAction;
+    }
+
+    const candidate = this.findVisibleResultLink(task, ctx.snapshot);
+    if (!candidate) {
+      return plannerAction;
+    }
+
+    const label = this.elementLabel(candidate);
+    const hrefVerify = this.hrefVerificationSignal(candidate.href || '', ctx.snapshot?.url || '');
+
+    return {
+      ...plannerAction,
+      action: 'CLICK',
+      goal: plannerAction.goal || 'Open visible result link',
+      intent: 'visible result link',
+      input: label || plannerAction.input,
+      verify: hrefVerify ? [{ predicate: 'url_contains', args: [hrefVerify] }] : [],
+      heuristicHints: [
+        {
+          intent_pattern: 'visible_result_link',
+          text_patterns: label ? [label] : [],
+          role_filter: ['link'],
+          priority: 20,
+        },
+      ],
+      reasoning:
+        plannerAction.reasoning ||
+        'Visible result link matched the task goal; clicking it is more direct than scrolling.',
+    };
+  }
+
+  private findVisibleResultLink(
+    task: string,
+    snapshot: Snapshot | null | undefined
+  ): SnapshotElement | null {
+    const elements = snapshot?.elements || [];
+    if (elements.length === 0 || !this.taskWantsResultNavigation(task)) {
+      return null;
+    }
+
+    const candidates = elements
+      .filter(element => this.isResultNavigationLink(element))
+      .sort((left, right) => (right.importance || 0) - (left.importance || 0));
+
+    return candidates[0] || null;
+  }
+
+  private taskWantsResultNavigation(task: string): boolean {
+    const normalized = task.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+    const actionCue = /\b(click|open|pick|choose|select|go to|visit)\b/.test(normalized);
+    const targetCue = /\b(product|result|item|listing|detail page|details page)\b/.test(normalized);
+    return actionCue && targetCue;
+  }
+
+  private isResultNavigationLink(element: SnapshotElement): boolean {
+    const role = (element.role || '').toLowerCase();
+    const href = (element.href || '').toLowerCase();
+    if (role !== 'link' || !href) {
+      return false;
+    }
+
+    if (/\/(?:dp|gp\/product|product|products|item|items|p)\//.test(href)) {
+      return true;
+    }
+
+    const label = this.elementLabel(element);
+    return Boolean(element.inDominantGroup && label.length >= 15);
+  }
+
+  private elementLabel(element: SnapshotElement): string {
+    return (element.text || element.ariaLabel || element.name || '').trim();
+  }
+
+  private hrefVerificationSignal(href: string, baseUrl: string): string | null {
+    if (!href.trim()) {
+      return null;
+    }
+
+    try {
+      const parsed = new URL(href, baseUrl || undefined);
+      if (parsed.pathname && parsed.pathname !== '/') {
+        return parsed.pathname;
+      }
+      return parsed.hostname || null;
+    } catch {
+      return href.startsWith('/') ? href : null;
+    }
   }
 
   private summarizePlannerActionTarget(plannerAction: StepwisePlannerResponse): string | null {

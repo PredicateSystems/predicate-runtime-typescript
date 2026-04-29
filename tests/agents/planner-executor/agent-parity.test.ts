@@ -251,6 +251,114 @@ describe('PlannerExecutorAgent parity', () => {
     expect(result.stepOutcomes[0].urlAfter).toBe('https://www.iana.org/help/example-domains');
   });
 
+  it('clicks a visible product result when the planner keeps choosing non-progress scrolling', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'SCROLL',
+        direction: 'down',
+        intent: 'find product result',
+        verify: [{ predicate: 'exists', args: ['Cooling Towel'] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'product detail opened' }),
+    ]);
+    const executor = new ProviderStub(['NONE']);
+    const runtime = new RuntimeStub(
+      'https://www.amazon.com/s?k=Cooling+Towels&ref=nb_sb_noss',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          { id: 10, role: 'searchbox', ariaLabel: 'Search Amazon', clickable: true },
+          {
+            id: 42,
+            role: 'link',
+            text: 'Cooling Towel 4 Pack for Neck and Face',
+            href: '/dp/B0COOLTOWEL',
+            clickable: true,
+            importance: 100,
+            inDominantGroup: true,
+          },
+        ]),
+      {
+        onClick: id => {
+          if (id === 42) {
+            runtime.currentUrl = 'https://www.amazon.com/dp/B0COOLTOWEL';
+          }
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: { retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 0 } },
+    });
+    const result = await agent.runStepwise(runtime, {
+      task: 'Search for Cooling Towels on amazon and click a product in search results to open its detail page',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.SUCCESS);
+    expect(result.stepOutcomes[0].actionTaken).toBe('CLICK(42)');
+    expect(runtime.scrollCalls).toEqual([]);
+    expect(runtime.clickCalls).toEqual([42]);
+    expect(result.stepOutcomes[0].urlAfter).toBe('https://www.amazon.com/dp/B0COOLTOWEL');
+  });
+
+  it('does not navigate to copied example.com planner prompt URLs for unrelated tasks', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'NAVIGATE',
+        target: 'https://example.com/search',
+        verify: [{ predicate: 'url_contains', args: ['search'] }],
+        reasoning: 'copied prompt example',
+      }),
+      JSON.stringify({
+        action: 'TYPE_AND_SUBMIT',
+        intent: 'searchbox',
+        input: 'cooling towels',
+        verify: [{ predicate: 'url_contains', args: ['/s?k='] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'search completed' }),
+    ]);
+    const executor = new ProviderStub(['NONE']);
+    const runtime = new RuntimeStub(
+      'https://www.amazon.com/',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          {
+            id: 11,
+            role: 'searchbox',
+            ariaLabel: 'Search Amazon',
+            clickable: true,
+            importance: 100,
+          },
+        ]),
+      {
+        onPressKey: () => {
+          runtime.currentUrl = 'https://www.amazon.com/s?k=cooling+towels&ref=nb_sb_noss';
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: {
+        retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 0 },
+        recovery: { enabled: false },
+      },
+    });
+    const result = await agent.runStepwise(runtime, {
+      task: 'Search for cooling towels, then pick a product and click it to go to its detail page',
+      startUrl: 'https://www.amazon.com/',
+    });
+
+    expect(runtime.gotoCalls).toEqual(['https://www.amazon.com/']);
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.SKIPPED);
+    expect(result.stepOutcomes[0].actionTaken).toBe('SKIPPED(placeholder_navigation)');
+    expect(result.stepOutcomes[1].actionTaken).toBe('TYPE(11, "cooling towels")');
+    expect(runtime.currentUrl).toContain('www.amazon.com/s?k=cooling+towels');
+  });
+
   it('uses vision execution when snapshot requires vision and executor supports it', async () => {
     const planner = new ProviderStub([
       JSON.stringify({ action: 'CLICK', intent: 'continue', input: 'Continue' }),

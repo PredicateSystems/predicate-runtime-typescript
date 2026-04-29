@@ -79,7 +79,7 @@ CRITICAL RULE FOR ADD TO CART:
 - Set "input" to "Add to Cart" (or exact button text from elements)
 
 Output ONLY valid JSON (no markdown, no \`\`\`):
-{"action":"NAVIGATE","target":"https://example.com/search","verify":[{"predicate":"url_contains","args":["search"]}],"reasoning":"open the search page"}
+{"action":"NAVIGATE","target":"https://shop.test/search","verify":[{"predicate":"url_contains","args":["search"]}],"reasoning":"open the known search page"}
 {"action":"TYPE_AND_SUBMIT","intent":"searchbox","input":"wireless headphones","verify":[{"predicate":"url_contains","args":["search"]}],"reasoning":"search for product"}
 {"action":"CLICK","intent":"product link","input":"Sony WH-1000XM4 Wireless...","verify":[],"required":true,"heuristic_hints":[{"intent_pattern":"product_link","text_patterns":["sony wh-1000xm4"],"role_filter":["link"],"priority":8}],"reasoning":"click first product result"}
 {"action":"CLICK","intent":"add to cart button","input":"Add to Cart","verify":[],"required":true,"heuristic_hints":[{"intent_pattern":"add_to_cart","text_patterns":["add to cart","buy now"],"role_filter":["button"],"priority":10}],"reasoning":"add item to cart"}
@@ -95,7 +95,8 @@ RULES:
 7. "heuristic_hints" entries may use snake_case fields: "intent_pattern", "text_patterns", "role_filter", "attribute_patterns", "priority"
 8. Output ONLY JSON - no <think> tags, no markdown, no prose
 9. Do NOT output <think> or any reasoning
-10. Do NOT return DONE until ALL parts of the goal are complete`;
+10. Do NOT return DONE until ALL parts of the goal are complete
+11. Never copy example URLs from these instructions. Only NAVIGATE to a URL from the user's task, the current page, or a visible element.`;
 
   // NOTE: /no_think MUST be at the START of user message for Qwen3 models
   const user = `/no_think
