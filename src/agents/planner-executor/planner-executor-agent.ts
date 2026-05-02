@@ -784,7 +784,7 @@ export class PlannerExecutorAgent {
           }
         }
 
-        let plannerAction: StepwisePlannerResponse;
+        let plannerAction: StepwisePlannerResponse | null = null;
         let plannerActionSource: 'planner' | 'repair' = 'planner';
         if (queuedRepairSteps.length > 0) {
           plannerAction = queuedRepairSteps.shift()!;
@@ -811,7 +811,7 @@ export class PlannerExecutorAgent {
             }
           }
 
-          let plannerResp: LLMResponse;
+          let plannerResp: LLMResponse | null = null;
           try {
             plannerResp = await this.planner.generate(systemPrompt, userPrompt, {
               temperature: this.config.plannerTemperature,
@@ -819,64 +819,74 @@ export class PlannerExecutorAgent {
             });
             this.recordTokenUsage('planner', plannerResp);
           } catch (plannerError) {
+            const plannerErrorMessage =
+              plannerError instanceof Error ? plannerError.message : String(plannerError);
+            const bootstrapAction = this.buildPlannerTimeoutBootstrapAction(
+              stepNum,
+              task,
+              ctx,
+              plannerErrorMessage
+            );
+            if (bootstrapAction) {
+              plannerAction = bootstrapAction;
+              plannerActionSource = 'repair';
+              if (this.config.verbose) {
+                console.log(
+                  `[PLANNER FALLBACK] Executing deterministic bootstrap action after planner timeout: ${JSON.stringify(bootstrapAction)}`
+                );
+              }
+              // Skip normal planner response parsing and continue with synthesized action.
+            } else {
+              // Log planner call failure
+              if (this.config.verbose) {
+                console.log(`[PLANNER ERROR] LLM call failed: ${plannerError}`);
+              }
+              stepOutcomes.push({
+                stepId: stepNum,
+                goal: 'Call planner LLM',
+                status: StepStatus.FAILED,
+                verificationPassed: false,
+                usedVision: false,
+                durationMs: Date.now() - stepStart,
+                error: `Planner LLM call failed: ${plannerErrorMessage}`,
+              });
+              if (this.shouldAbortOnPlannerFailure(plannerErrorMessage)) {
+                error = `Planner unavailable: ${plannerErrorMessage}`;
+                break;
+              }
+              continue;
+            }
+          }
+
+          if (!plannerActionSource || plannerActionSource === 'planner') {
+            if (!plannerResp) {
+              stepOutcomes.push({
+                stepId: stepNum,
+                goal: 'Call planner LLM',
+                status: StepStatus.FAILED,
+                verificationPassed: false,
+                usedVision: false,
+                durationMs: Date.now() - stepStart,
+                error: 'Planner response missing after planner action path',
+              });
+              continue;
+            }
             // Log planner call failure
             if (this.config.verbose) {
-              console.log(`[PLANNER ERROR] LLM call failed: ${plannerError}`);
+              // Show raw response for debugging (truncated if very long)
+              const rawLen = plannerResp.content.length;
+              const hasThink = plannerResp.content.includes('<think>');
+              const displayContent =
+                rawLen > 300
+                  ? plannerResp.content.slice(0, 300) + `... (${rawLen} chars)`
+                  : plannerResp.content;
+              console.log(`[PLANNER]${hasThink ? ' (has <think>)' : ''} ${displayContent}`);
             }
-            stepOutcomes.push({
-              stepId: stepNum,
-              goal: 'Call planner LLM',
-              status: StepStatus.FAILED,
-              verificationPassed: false,
-              usedVision: false,
-              durationMs: Date.now() - stepStart,
-              error: `Planner LLM call failed: ${plannerError instanceof Error ? plannerError.message : String(plannerError)}`,
-            });
-            continue;
-          }
 
-          if (this.config.verbose) {
-            // Show raw response for debugging (truncated if very long)
-            const rawLen = plannerResp.content.length;
-            const hasThink = plannerResp.content.includes('<think>');
-            const displayContent =
-              rawLen > 300
-                ? plannerResp.content.slice(0, 300) + `... (${rawLen} chars)`
-                : plannerResp.content;
-            console.log(`[PLANNER]${hasThink ? ' (has <think>)' : ''} ${displayContent}`);
-          }
-
-          // Check for empty response
-          if (!plannerResp.content || plannerResp.content.trim().length === 0) {
-            if (this.config.verbose) {
-              console.log(`[PLANNER ERROR] Empty response from LLM`);
-            }
-            stepOutcomes.push({
-              stepId: stepNum,
-              goal: 'Parse planner response',
-              status: StepStatus.FAILED,
-              verificationPassed: false,
-              usedVision: false,
-              durationMs: Date.now() - stepStart,
-              error: 'Planner returned empty response',
-            });
-            continue;
-          }
-
-          // Parse planner response
-          try {
-            plannerAction = this.normalizePlannerAction(extractJson(plannerResp.content));
-          } catch (e) {
-            // Try to recover from malformed JSON
-            const parsed = parseAction(plannerResp.content);
-            if (parsed.action !== 'UNKNOWN') {
-              plannerAction = {
-                action: parsed.action as StepwisePlannerResponse['action'],
-                input: parsed.args[1] as string | undefined,
-              };
-            } else {
+            // Check for empty response
+            if (!plannerResp.content || plannerResp.content.trim().length === 0) {
               if (this.config.verbose) {
-                console.log(`[PLANNER ERROR] Raw response: ${plannerResp.content.slice(0, 200)}`);
+                console.log(`[PLANNER ERROR] Empty response from LLM`);
               }
               stepOutcomes.push({
                 stepId: stepNum,
@@ -885,11 +895,52 @@ export class PlannerExecutorAgent {
                 verificationPassed: false,
                 usedVision: false,
                 durationMs: Date.now() - stepStart,
-                error: `Failed to parse planner response: ${e}`,
+                error: 'Planner returned empty response',
               });
               continue;
             }
+
+            // Parse planner response
+            try {
+              plannerAction = this.normalizePlannerAction(extractJson(plannerResp.content));
+            } catch (e) {
+              // Try to recover from malformed JSON
+              const parsed = parseAction(plannerResp.content);
+              if (parsed.action !== 'UNKNOWN') {
+                plannerAction = {
+                  action: parsed.action as StepwisePlannerResponse['action'],
+                  input: parsed.args[1] as string | undefined,
+                };
+              } else {
+                if (this.config.verbose) {
+                  console.log(`[PLANNER ERROR] Raw response: ${plannerResp.content.slice(0, 200)}`);
+                }
+                stepOutcomes.push({
+                  stepId: stepNum,
+                  goal: 'Parse planner response',
+                  status: StepStatus.FAILED,
+                  verificationPassed: false,
+                  usedVision: false,
+                  durationMs: Date.now() - stepStart,
+                  error: `Failed to parse planner response: ${e}`,
+                });
+                continue;
+              }
+            }
           }
+        }
+
+        if (!plannerAction) {
+          stepOutcomes.push({
+            stepId: stepNum,
+            goal: 'Parse planner response',
+            status: StepStatus.FAILED,
+            verificationPassed: false,
+            usedVision: false,
+            durationMs: Date.now() - stepStart,
+            error: 'Planner action missing after planner/repair resolution',
+          });
+          continue;
         }
 
         plannerAction = this.promoteVisibleResultClick(task, ctx, plannerAction);
@@ -1136,6 +1187,69 @@ export class PlannerExecutorAgent {
       tokenUsage: this.tokenCollector.summary(),
       fallbackUsed,
     };
+  }
+
+  private shouldAbortOnPlannerFailure(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('timed out') ||
+      normalized.includes('browser agent run cancelled') ||
+      normalized.includes('signal is aborted')
+    );
+  }
+
+  private buildPlannerTimeoutBootstrapAction(
+    stepNum: number,
+    task: string,
+    ctx: SnapshotContext,
+    plannerErrorMessage: string
+  ): StepwisePlannerResponse | null {
+    if (stepNum !== 1 || !plannerErrorMessage.toLowerCase().includes('timed out')) {
+      return null;
+    }
+    const elements = ctx.snapshot?.elements || [];
+    const hasSearchInput = elements.some(element =>
+      ['searchbox', 'textbox', 'combobox', 'input', 'textarea'].includes(
+        (element.role || '').toLowerCase()
+      )
+    );
+    if (!hasSearchInput) {
+      return null;
+    }
+    const query = this.extractSearchQueryFromTask(task);
+    if (!query) {
+      return null;
+    }
+    const verificationToken = this.extractVerificationTokenFromQuery(query);
+    return {
+      action: 'TYPE_AND_SUBMIT',
+      intent: 'searchbox',
+      input: query,
+      verify: verificationToken ? [{ predicate: 'url_contains', args: [verificationToken] }] : [],
+      required: true,
+      reasoning: 'Deterministic fallback after planner timeout on step 1',
+    };
+  }
+
+  private extractSearchQueryFromTask(task: string): string | null {
+    const directPattern = /search\s+for\s+(.+?)(?:\s+on\s+|,|then|$)/i;
+    const directMatch = task.match(directPattern);
+    const raw = directMatch?.[1] ?? task.match(/search\s+(.+?)(?:\s+on\s+|,|then|$)/i)?.[1] ?? null;
+    if (!raw) {
+      return null;
+    }
+    const cleaned = raw.replace(/^["']|["']$/g, '').trim();
+    return cleaned.length > 0 ? cleaned : null;
+  }
+
+  private extractVerificationTokenFromQuery(query: string): string | null {
+    const normalized = query
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+    const token = normalized.find(part => part.length >= 3);
+    return token || null;
   }
 
   // ---------------------------------------------------------------------------
@@ -1432,7 +1546,22 @@ export class PlannerExecutorAgent {
         const targetElement =
           activeCtx.snapshot?.elements.find(element => element.id === elementId) || null;
         await runtime.click(elementId);
-        await this.handlePostClickEffects(runtime, plannerAction, activeCtx);
+        let postClickEffectsError: string | undefined;
+        let modalHandled = false;
+        try {
+          const postClickResult = await this.handlePostClickEffects(
+            runtime,
+            plannerAction,
+            activeCtx
+          );
+          modalHandled = postClickResult.handled;
+        } catch (postClickError) {
+          postClickEffectsError =
+            postClickError instanceof Error ? postClickError.message : String(postClickError);
+          if (this.config.verbose) {
+            console.log(`[CLICK] Post-click effects failed: ${postClickEffectsError}`);
+          }
+        }
         const urlAfter = await runtime.getCurrentUrl();
         const hasUrlVerification = (plannerAction.verify || []).some(
           predicate =>
@@ -1450,19 +1579,63 @@ export class PlannerExecutorAgent {
           relevantUrlChange &&
           (!hasUrlVerification ||
             this.clickedHrefMatchesNavigation(currentUrl, urlAfter, targetElement));
-        const verificationPassed =
-          navigationSatisfied || (await this.verifyStepOutcome(runtime, plannerAction));
+        const hasVerificationPredicates = (plannerAction.verify?.length || 0) > 0;
+        const requiresNavigation = this.clickIntentRequiresNavigation(plannerAction, targetElement);
+        const predicateSatisfied = hasVerificationPredicates
+          ? await this.verifyStepOutcome(runtime, plannerAction)
+          : false;
+        let verificationPassed =
+          navigationSatisfied ||
+          predicateSatisfied ||
+          (!requiresNavigation && !hasVerificationPredicates) ||
+          modalHandled;
+        let finalActionTaken = `CLICK(${elementId})`;
+        let finalUrlAfter = urlAfter;
+
+        if (!verificationPassed && requiresNavigation && activeCtx.snapshot?.elements) {
+          const fallbackElementId = this.findFallbackNavigationClickTarget(
+            activeCtx.snapshot.elements,
+            elementId,
+            plannerAction
+          );
+          if (fallbackElementId !== null) {
+            const fallbackElement =
+              activeCtx.snapshot.elements.find(element => element.id === fallbackElementId) || null;
+            try {
+              await runtime.click(fallbackElementId);
+              finalActionTaken = `CLICK(${elementId}) -> CLICK(${fallbackElementId})`;
+              finalUrlAfter = await runtime.getCurrentUrl();
+              const fallbackNavigationSatisfied = isUrlChangeRelevantToIntent(
+                currentUrl,
+                finalUrlAfter,
+                plannerAction,
+                fallbackElement
+              );
+              const fallbackPredicateSatisfied = hasVerificationPredicates
+                ? await this.verifyStepOutcome(runtime, plannerAction)
+                : false;
+              verificationPassed = fallbackNavigationSatisfied || fallbackPredicateSatisfied;
+            } catch (fallbackClickError) {
+              if (this.config.verbose) {
+                console.log(
+                  `[CLICK-FALLBACK] Failed fallback click ${fallbackElementId}: ${fallbackClickError}`
+                );
+              }
+            }
+          }
+        }
         return {
           stepId: stepNum,
           goal: plannerAction.intent || 'Click element',
           status: verificationPassed ? StepStatus.SUCCESS : StepStatus.FAILED,
-          actionTaken: `CLICK(${elementId})`,
+          actionTaken: finalActionTaken,
           llmResponseText: executorResp?.content,
           verificationPassed,
           usedVision: shouldUseVision,
           durationMs: Date.now() - stepStart,
           urlBefore: currentUrl,
-          urlAfter,
+          urlAfter: finalUrlAfter,
+          error: !verificationPassed ? postClickEffectsError : undefined,
         };
       } else if (parsed.action === 'TYPE') {
         const text = plannerAction.input || (parsed.args[1] as string) || '';
@@ -2477,6 +2650,96 @@ export class PlannerExecutorAgent {
     }
   }
 
+  private clickIntentRequiresNavigation(
+    plannerAction: StepwisePlannerResponse,
+    targetElement: SnapshotElement | null
+  ): boolean {
+    if ((plannerAction.verify?.length || 0) > 0) {
+      return true;
+    }
+    const intentText = `${plannerAction.intent || ''} ${plannerAction.input || ''}`.toLowerCase();
+    if (/\b(product|result|detail|item|open|visit|page|link)\b/.test(intentText)) {
+      return true;
+    }
+    const href = (targetElement?.href || '').trim().toLowerCase();
+    if (!href) {
+      return false;
+    }
+    return !href.startsWith('#') && !href.startsWith('javascript:');
+  }
+
+  private findFallbackNavigationClickTarget(
+    elements: SnapshotElement[],
+    attemptedElementId: number,
+    plannerAction: StepwisePlannerResponse
+  ): number | null {
+    const terms = `${plannerAction.intent || ''} ${plannerAction.input || ''}`
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(term => term.length >= 3);
+
+    const candidates = elements
+      .filter(element => element.id !== attemptedElementId)
+      .filter(element => {
+        const role = (element.role || '').toLowerCase();
+        return role === 'link' || Boolean(element.href);
+      })
+      .map(element => {
+        const href = (element.href || '').toLowerCase();
+        const text =
+          `${element.text || ''} ${element.name || ''} ${element.ariaLabel || ''}`.toLowerCase();
+        let score = 0;
+        if (
+          /\/(?:dp|gp\/product|product|products|item|items|sku|detail|details|listing|p)\b/.test(
+            href
+          )
+        ) {
+          score += 100;
+        }
+        if (/\/(?:s|search|results?)\b/.test(href)) {
+          score += 20;
+        }
+        if (this.looksLikeNavChromeLink(href, text)) {
+          score -= 80;
+        }
+        if (this.extractPathDepth(href) >= 2) {
+          score += 10;
+        }
+        if (element.clickable) {
+          score += 10;
+        }
+        if (terms.some(term => text.includes(term) || href.includes(term))) {
+          score += 25;
+        }
+        if (text.length >= 12) {
+          score += 5;
+        }
+        return { id: element.id, score };
+      })
+      .filter(candidate => candidate.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    return candidates.length > 0 ? candidates[0].id : null;
+  }
+
+  private looksLikeNavChromeLink(href: string, label: string): boolean {
+    const chromeCues =
+      /\b(home|logo|account|signin|sign in|login|help|customer service|returns?)\b/;
+    return chromeCues.test(href) || chromeCues.test(label);
+  }
+
+  private extractPathDepth(href: string): number {
+    if (!href) {
+      return 0;
+    }
+    try {
+      const parsed = new URL(href, 'https://placeholder.local');
+      return parsed.pathname.split('/').filter(Boolean).length;
+    } catch {
+      return href.split('?')[0].split('/').filter(Boolean).length;
+    }
+  }
+
   private normalizeNavigationUrl(url: string): string {
     return url.trim().replace(/\/+$/, '').toLowerCase();
   }
@@ -2613,9 +2876,9 @@ export class PlannerExecutorAgent {
     runtime: AgentRuntime,
     plannerAction: StepwisePlannerResponse,
     ctx: SnapshotContext
-  ): Promise<void> {
+  ): Promise<{ handled: boolean }> {
     if (!this.config.modal.enabled || !ctx.snapshot) {
-      return;
+      return { handled: false };
     }
 
     const postSnap = await runtime.snapshot({
@@ -2624,20 +2887,22 @@ export class PlannerExecutorAgent {
       goal: plannerAction.intent || plannerAction.action,
     });
     if (!postSnap) {
-      return;
+      return { handled: false };
     }
 
     const preElements = new Set((ctx.snapshot.elements || []).map(el => el.id));
     const postElements = new Set((postSnap.elements || []).map(el => el.id));
     if (!detectModalAppearance(preElements, postElements, this.config.modal.minNewElements)) {
-      return;
+      return { handled: false };
     }
 
     const modalElements = (postSnap.elements || []).filter(element => !preElements.has(element.id));
     const checkoutTarget = this.findCheckoutContinuationTarget(modalElements);
     if (checkoutTarget !== null) {
       if (!shouldAutoContinueCheckoutFlow(plannerAction.intent)) {
-        return;
+        // Drawer has checkout/cart controls but intent is unrelated — leave it alone.
+        // Still report as handled since the modal appearance confirms the click worked.
+        return { handled: true };
       }
       this.tracer?.emit(
         'modal_action',
@@ -2654,12 +2919,12 @@ export class PlannerExecutorAgent {
         this.getTraceStepId()
       );
       await runtime.click(checkoutTarget);
-      return;
+      return { handled: true };
     }
 
     const dismissal = findDismissalTarget(modalElements, this.config.modal);
     if (!dismissal.found || dismissal.elementId === null) {
-      return;
+      return { handled: false };
     }
 
     this.tracer?.emit(
@@ -2684,10 +2949,11 @@ export class PlannerExecutorAgent {
       goal: plannerAction.intent || plannerAction.action,
     });
     if (!finalSnap) {
-      return;
+      return { handled: true };
     }
 
     detectModalDismissed(postElements, new Set((finalSnap.elements || []).map(el => el.id)));
+    return { handled: true };
   }
 
   private findCheckoutContinuationTarget(elements: SnapshotElement[]): number | null {

@@ -192,4 +192,29 @@ describe('plan normalization', () => {
     expect(runtime.gotoCalls).toEqual(['https://shop.test/results']);
     expect(executor.calls).toBe(0);
   });
+
+  it('drops null target values in normalized replan patches', () => {
+    const normalized = normalizePlan({
+      task: 'Recover',
+      steps: [
+        {
+          id: 1,
+          action: 'navigate',
+          target: null,
+          verify: [],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      task: 'Recover',
+      steps: [
+        {
+          id: 1,
+          action: 'NAVIGATE',
+          verify: [],
+        },
+      ],
+    });
+  });
 });

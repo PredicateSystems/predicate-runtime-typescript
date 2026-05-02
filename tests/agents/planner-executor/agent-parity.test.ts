@@ -65,6 +65,54 @@ class ProviderStub extends LLMProvider {
   }
 }
 
+class ThrowingProvider extends LLMProvider {
+  get modelName(): string {
+    return 'throwing-stub';
+  }
+
+  supportsJsonMode(): boolean {
+    return true;
+  }
+
+  supportsVision(): boolean {
+    return false;
+  }
+
+  async generate(): Promise<LLMResponse> {
+    throw new Error('LLM request timed out after 120000ms');
+  }
+}
+
+class TimeoutThenDoneProvider extends LLMProvider {
+  private called = false;
+
+  get modelName(): string {
+    return 'timeout-then-done-stub';
+  }
+
+  supportsJsonMode(): boolean {
+    return true;
+  }
+
+  supportsVision(): boolean {
+    return false;
+  }
+
+  async generate(): Promise<LLMResponse> {
+    if (!this.called) {
+      this.called = true;
+      throw new Error('LLM request timed out after 120000ms');
+    }
+    return {
+      content: JSON.stringify({ action: 'DONE', reasoning: 'fallback search submitted' }),
+      modelName: this.modelName,
+      promptTokens: 10,
+      completionTokens: 5,
+      totalTokens: 15,
+    };
+  }
+}
+
 class RuntimeStub implements AgentRuntime {
   public currentUrl: string;
   public clickCalls: number[] = [];
@@ -148,6 +196,70 @@ function makeSnapshot(
 }
 
 describe('PlannerExecutorAgent parity', () => {
+  it('bootstraps TYPE_AND_SUBMIT on step 1 when planner times out and searchbox is visible', async () => {
+    const planner = new TimeoutThenDoneProvider();
+    const executor = new ProviderStub([]);
+    const runtime = new RuntimeStub(
+      'https://www.amazon.com/',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          { id: 1, role: 'searchbox', text: 'Search Amazon', clickable: true, importance: 100 },
+        ]),
+      {
+        onPressKey: key => {
+          if (key === 'Enter') {
+            runtime.currentUrl = 'https://www.amazon.com/s?k=noise+canceling+earbuds';
+          }
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: {
+        stepwise: { maxSteps: 12 },
+      },
+    });
+    const result = await agent.runStepwise(runtime, {
+      task: 'Search for noise canceling earbuds on Amazon',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.SUCCESS);
+    expect(result.stepOutcomes[0].actionTaken).toBe('TYPE(1, "noise canceling earbuds")');
+    expect(runtime.typeCalls).toEqual([{ elementId: 1, text: 'noise canceling earbuds' }]);
+    expect(runtime.keyCalls).toContain('Enter');
+    expect(result.stepOutcomes[0].verificationPassed).toBe(true);
+  });
+
+  it('aborts early when planner times out without searchable context', async () => {
+    const planner = new ThrowingProvider();
+    const executor = new ProviderStub(['NONE']);
+    const runtime = new RuntimeStub('https://www.amazon.com/', () =>
+      makeSnapshot('https://www.amazon.com/', [
+        { id: 1, role: 'link', text: 'Home', clickable: true, importance: 100 },
+      ])
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: {
+        stepwise: { maxSteps: 12 },
+      },
+    });
+    const result = await agent.runStepwise(runtime, {
+      task: 'Search for noise canceling earbuds on Amazon',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.stepsTotal).toBe(1);
+    expect(result.stepOutcomes).toHaveLength(1);
+    expect(result.stepOutcomes[0].goal).toBe('Call planner LLM');
+    expect(result.error).toContain('Planner unavailable');
+  });
+
   it('skips execution when pre-step verification already passes', async () => {
     const planner = new ProviderStub([
       JSON.stringify({
@@ -251,6 +363,68 @@ describe('PlannerExecutorAgent parity', () => {
     expect(result.stepOutcomes[0].urlAfter).toBe('https://www.iana.org/help/example-domains');
   });
 
+  it('retries product-link click with best navigation candidate when first click does not navigate', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'CLICK',
+        intent: 'product link',
+        input: 'noise canceling earbuds',
+        verify: [],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'product opened' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(1)']);
+    const runtime = new RuntimeStub(
+      'https://shop.test/search?q=noise+canceling+earbuds',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          {
+            id: 1,
+            role: 'link',
+            text: 'Home',
+            href: 'https://shop.test/home',
+            clickable: true,
+            importance: 100,
+          },
+          {
+            id: 2,
+            role: 'link',
+            text: 'Noise Canceling Earbuds Product',
+            href: 'https://shop.test/products/noise-canceling-earbuds-123',
+            clickable: true,
+            importance: 90,
+          },
+        ]),
+      {
+        onClick: id => {
+          if (id === 1) {
+            runtime.currentUrl = 'https://shop.test/search?q=noise+canceling+earbuds';
+          }
+          if (id === 2) {
+            runtime.currentUrl = 'https://shop.test/products/noise-canceling-earbuds-123';
+          }
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: { retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 0 } },
+    });
+    const result = await agent.runStepwise(runtime, {
+      task: 'Search for noise canceling earbuds on amazon and open a product link',
+    });
+
+    expect(result.success).toBe(true);
+    expect(runtime.clickCalls).toEqual([1, 2]);
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.SUCCESS);
+    expect(result.stepOutcomes[0].actionTaken).toBe('CLICK(1) -> CLICK(2)');
+    expect(result.stepOutcomes[0].urlAfter).toBe(
+      'https://shop.test/products/noise-canceling-earbuds-123'
+    );
+  });
+
   it('clicks a visible product result when the planner keeps choosing non-progress scrolling', async () => {
     const planner = new ProviderStub([
       JSON.stringify({
@@ -300,6 +474,74 @@ describe('PlannerExecutorAgent parity', () => {
     expect(result.stepOutcomes[0].actionTaken).toBe('CLICK(42)');
     expect(runtime.scrollCalls).toEqual([]);
     expect(runtime.clickCalls).toEqual([42]);
+    expect(result.stepOutcomes[0].urlAfter).toBe('https://www.amazon.com/dp/B0COOLTOWEL');
+  });
+
+  it('keeps click success when post-click effects fail during navigation handoff', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'CLICK',
+        intent: 'product link',
+        input: 'Cooling Towel product link',
+        verify: [{ predicate: 'url_contains', args: ['/dp/'] }],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'product detail opened' }),
+    ]);
+    const executor = new ProviderStub(['CLICK(42)']);
+    let clickTriggered = false;
+    const runtime: AgentRuntime = {
+      currentUrl: 'https://www.amazon.com/s?k=cooling+towels',
+      async snapshot(): Promise<Snapshot | null> {
+        if (clickTriggered) {
+          throw new Error('Could not establish connection. Receiving end does not exist.');
+        }
+        return makeSnapshot('https://www.amazon.com/s?k=cooling+towels', [
+          {
+            id: 42,
+            role: 'link',
+            text: 'Cooling Towel 4 Pack',
+            href: '/dp/B0COOLTOWEL',
+            clickable: true,
+            importance: 100,
+            inDominantGroup: true,
+          },
+        ]);
+      },
+      async goto(url: string): Promise<void> {
+        this.currentUrl = url;
+      },
+      async click(elementId: number): Promise<void> {
+        if (elementId === 42) {
+          clickTriggered = true;
+          this.currentUrl = 'https://www.amazon.com/dp/B0COOLTOWEL';
+        }
+      },
+      async type(): Promise<void> {},
+      async pressKey(): Promise<void> {},
+      async scroll(): Promise<void> {},
+      async getCurrentUrl(): Promise<string> {
+        return this.currentUrl;
+      },
+      async getViewportHeight(): Promise<number> {
+        return 1000;
+      },
+      async scrollBy(): Promise<boolean> {
+        return true;
+      },
+    } as AgentRuntime & { currentUrl: string };
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: { retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 0 } },
+    });
+    const result = await agent.runStepwise(runtime, {
+      task: 'Click a cooling towel product link and open its detail page',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.SUCCESS);
+    expect(result.stepOutcomes[0].actionTaken).toBe('CLICK(42)');
     expect(result.stepOutcomes[0].urlAfter).toBe('https://www.amazon.com/dp/B0COOLTOWEL');
   });
 

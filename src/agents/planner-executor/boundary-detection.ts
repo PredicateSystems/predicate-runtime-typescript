@@ -285,6 +285,20 @@ function urlPredicateSignals(verify: PredicateSpec[] | undefined): string[] {
   return signals;
 }
 
+function isProductNavigationIntent(step: {
+  action?: string;
+  intent?: string;
+  input?: string;
+  verify?: PredicateSpec[];
+}): boolean {
+  const action = (step.action || '').toUpperCase();
+  if (action !== 'CLICK') {
+    return false;
+  }
+  const cues = `${normalizeIntentText(step.intent)} ${normalizeIntentText(step.input)}`;
+  return /\b(product|result|details?|item|listing)\b/.test(cues);
+}
+
 export function isSearchLikeTypeAndSubmit(
   step: { action?: string; intent?: string; input?: string; verify?: PredicateSpec[] },
   element?: Pick<SnapshotElement, 'role' | 'text' | 'name' | 'ariaLabel'> | null
@@ -328,6 +342,18 @@ export function isUrlChangeRelevantToIntent(
     predicateSignals.every(signal => nextSignals.some(nextSignal => nextSignal.includes(signal)))
   ) {
     return true;
+  }
+
+  if (isProductNavigationIntent(step)) {
+    const productUrlHints = ['/dp/', '/product/', '/item/', '/sku/', '/p/'];
+    if (productUrlHints.some(hint => normalizeIntentText(nextUrl).includes(hint))) {
+      return true;
+    }
+    const terms = [...queryTerms(step.input), ...queryTerms(step.intent)];
+    if (terms.length > 0) {
+      return terms.some(term => nextSignals.some(signal => signal.includes(term)));
+    }
+    return false;
   }
 
   if (!isSearchLikeTypeAndSubmit(step, element)) {

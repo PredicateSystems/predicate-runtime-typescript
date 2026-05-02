@@ -19,6 +19,23 @@ function nearbyTextOf(element: SnapshotElement): string {
   return String(element.nearbyText || '').toLowerCase();
 }
 
+function combinedTextOf(element: SnapshotElement): string {
+  return [element.text, element.name, element.ariaLabel, element.nearbyText, element.href]
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase();
+}
+
+function hasSearchCue(element: SnapshotElement): boolean {
+  const combined = combinedTextOf(element);
+  return (
+    combined.includes('search') ||
+    combined.includes('keyword') ||
+    combined.includes('find') ||
+    combined.includes('query')
+  );
+}
+
 function roleOf(element: SnapshotElement): string {
   return String(element.role || '').toLowerCase();
 }
@@ -62,7 +79,10 @@ function allowShopping(element: SnapshotElement): boolean {
   if (text.includes('$') || nearbyText.includes('price')) {
     return true;
   }
-  if (['textbox', 'searchbox', 'combobox'].includes(role) && text.includes('search')) {
+  if (role === 'searchbox') {
+    return true;
+  }
+  if (['textbox', 'combobox', 'input', 'textarea'].includes(role) && hasSearchCue(element)) {
     return true;
   }
   return Boolean(element.inDominantGroup && text.trim().length >= 3);

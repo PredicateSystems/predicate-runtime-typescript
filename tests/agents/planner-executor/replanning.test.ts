@@ -289,6 +289,64 @@ describe('PlannerExecutorAgent replanning', () => {
     expect(runtime.gotoCalls).toEqual(['https://shop.test/checkout']);
   });
 
+  it('accepts numeric repair-step targets emitted by local models', async () => {
+    const planner = new ProviderStub([
+      JSON.stringify({
+        action: 'CLICK',
+        intent: 'open product details',
+        input: 'Product card',
+        verify: [{ predicate: 'url_contains', args: ['/product/42'] }],
+        required: true,
+      }),
+      JSON.stringify({
+        mode: 'patch',
+        replace_steps: [
+          {
+            id: 1,
+            step: {
+              id: 1,
+              goal: 'Open the product details link',
+              action: 'CLICK',
+              target: 67,
+              intent: 'product details link',
+              input: 'Product card',
+              verify: [{ predicate: 'url_contains', args: ['/product/42'] }],
+              required: true,
+            },
+          },
+        ],
+      }),
+      JSON.stringify({ action: 'DONE', reasoning: 'repair succeeded' }),
+    ]);
+    const executor = new ProviderStub(['NONE', 'CLICK(1)']);
+    const runtime = new RuntimeStub(
+      'https://shop.test/search',
+      rt =>
+        makeSnapshot(rt.currentUrl, [
+          { id: 1, role: 'link', text: 'Product card', clickable: true },
+        ]),
+      {
+        onClick: elementId => {
+          if (elementId === 1) {
+            runtime.currentUrl = 'https://shop.test/product/42';
+          }
+        },
+      }
+    );
+
+    const agent = new PlannerExecutorAgent({
+      planner,
+      executor,
+      config: { retry: { verifyTimeoutMs: 20, verifyPollMs: 1, maxReplans: 1 } },
+    });
+    const result = await agent.runStepwise(runtime, { task: 'Open product details' });
+
+    expect(result.success).toBe(true);
+    expect(result.replansUsed).toBe(1);
+    expect(result.error).toBeUndefined();
+    expect(result.stepOutcomes[0].status).toBe(StepStatus.FAILED);
+  });
+
   it('stops replanning at maxReplans and includes prior history in repair prompts', async () => {
     const planner = new ProviderStub([
       JSON.stringify({
