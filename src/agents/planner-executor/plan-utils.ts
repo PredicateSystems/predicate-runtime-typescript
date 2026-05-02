@@ -139,6 +139,36 @@ function stripThinkingTags(content: string): string {
 }
 
 /**
+ * Repair common JSON issues from LLM output.
+ *
+ * Handles:
+ * - Unquoted object keys (valid JS but not valid JSON): `reasoning:"..."` → `"reasoning":"..."`
+ * - Single-quoted strings: `'text'` → `"text"`
+ * - Trailing commas before `}` or `]`
+ *
+ * @param text - Raw text that looks like JSON but may have syntax issues
+ * @returns Repaired JSON string
+ */
+function repairJson(text: string): string {
+  let repaired = text;
+
+  // Add double quotes around unquoted object keys
+  // Matches: word-characters followed by colon (not already inside a string)
+  // Pattern: start of object `{` or comma `,`, optional whitespace, then unquoted key, then `:`
+  repaired = repaired.replace(/([{,]\s*)([\w$]+)\s*:/g, '$1"$2":');
+
+  // Replace single-quoted strings with double-quoted strings
+  // This is a simple heuristic — it won't handle escaped single quotes inside strings,
+  // but it handles the common case of LLMs outputting `'text'` instead of `"text"`
+  repaired = repaired.replace(/'([^']*)'/g, '"$1"');
+
+  // Remove trailing commas before } or ]
+  repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+
+  return repaired;
+}
+
+/**
  * Extract JSON from LLM response that may contain markdown or prose.
  *
  * Handles:
@@ -178,8 +208,22 @@ export function extractJson(content: string): Record<string, unknown> {
     try {
       return JSON.parse(jsonMatch[0]);
     } catch {
-      // Continue to last resort
+      // Try to repair common JSON issues: unquoted keys (valid JS but not valid JSON)
+      try {
+        const repaired = repairJson(jsonMatch[0]);
+        return JSON.parse(repaired);
+      } catch {
+        // Continue to last resort
+      }
     }
+  }
+
+  // Last resort: try to repair the entire cleaned content as a JS object literal
+  try {
+    const repaired = repairJson(cleaned);
+    return JSON.parse(repaired);
+  } catch {
+    // Give up
   }
 
   throw new Error(`Failed to extract JSON from response: ${cleaned.slice(0, 200)}`);
