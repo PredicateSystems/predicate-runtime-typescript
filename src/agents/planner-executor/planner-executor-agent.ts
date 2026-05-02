@@ -1547,8 +1547,14 @@ export class PlannerExecutorAgent {
           activeCtx.snapshot?.elements.find(element => element.id === elementId) || null;
         await runtime.click(elementId);
         let postClickEffectsError: string | undefined;
+        let modalHandled = false;
         try {
-          await this.handlePostClickEffects(runtime, plannerAction, activeCtx);
+          const postClickResult = await this.handlePostClickEffects(
+            runtime,
+            plannerAction,
+            activeCtx
+          );
+          modalHandled = postClickResult.handled;
         } catch (postClickError) {
           postClickEffectsError =
             postClickError instanceof Error ? postClickError.message : String(postClickError);
@@ -1581,7 +1587,8 @@ export class PlannerExecutorAgent {
         let verificationPassed =
           navigationSatisfied ||
           predicateSatisfied ||
-          (!requiresNavigation && !hasVerificationPredicates);
+          (!requiresNavigation && !hasVerificationPredicates) ||
+          modalHandled;
         let finalActionTaken = `CLICK(${elementId})`;
         let finalUrlAfter = urlAfter;
 
@@ -2869,9 +2876,9 @@ export class PlannerExecutorAgent {
     runtime: AgentRuntime,
     plannerAction: StepwisePlannerResponse,
     ctx: SnapshotContext
-  ): Promise<void> {
+  ): Promise<{ handled: boolean }> {
     if (!this.config.modal.enabled || !ctx.snapshot) {
-      return;
+      return { handled: false };
     }
 
     const postSnap = await runtime.snapshot({
@@ -2880,20 +2887,22 @@ export class PlannerExecutorAgent {
       goal: plannerAction.intent || plannerAction.action,
     });
     if (!postSnap) {
-      return;
+      return { handled: false };
     }
 
     const preElements = new Set((ctx.snapshot.elements || []).map(el => el.id));
     const postElements = new Set((postSnap.elements || []).map(el => el.id));
     if (!detectModalAppearance(preElements, postElements, this.config.modal.minNewElements)) {
-      return;
+      return { handled: false };
     }
 
     const modalElements = (postSnap.elements || []).filter(element => !preElements.has(element.id));
     const checkoutTarget = this.findCheckoutContinuationTarget(modalElements);
     if (checkoutTarget !== null) {
       if (!shouldAutoContinueCheckoutFlow(plannerAction.intent)) {
-        return;
+        // Drawer has checkout/cart controls but intent is unrelated — leave it alone.
+        // Still report as handled since the modal appearance confirms the click worked.
+        return { handled: true };
       }
       this.tracer?.emit(
         'modal_action',
@@ -2910,12 +2919,12 @@ export class PlannerExecutorAgent {
         this.getTraceStepId()
       );
       await runtime.click(checkoutTarget);
-      return;
+      return { handled: true };
     }
 
     const dismissal = findDismissalTarget(modalElements, this.config.modal);
     if (!dismissal.found || dismissal.elementId === null) {
-      return;
+      return { handled: false };
     }
 
     this.tracer?.emit(
@@ -2940,10 +2949,11 @@ export class PlannerExecutorAgent {
       goal: plannerAction.intent || plannerAction.action,
     });
     if (!finalSnap) {
-      return;
+      return { handled: true };
     }
 
     detectModalDismissed(postElements, new Set((finalSnap.elements || []).map(el => el.id)));
+    return { handled: true };
   }
 
   private findCheckoutContinuationTarget(elements: SnapshotElement[]): number | null {
