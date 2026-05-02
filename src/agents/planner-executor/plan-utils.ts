@@ -362,6 +362,13 @@ function normalizeStep(step: Record<string, unknown>): Record<string, unknown> {
     delete normalizedStep.url;
   }
 
+  if ('target' in normalizedStep && typeof normalizedStep.target === 'number') {
+    normalizedStep.target = String(normalizedStep.target);
+  }
+  if ('target' in normalizedStep && normalizedStep.target === null) {
+    delete normalizedStep.target;
+  }
+
   if ('id' in normalizedStep && typeof normalizedStep.id === 'string') {
     const parsed = parseInt(normalizedStep.id, 10);
     if (!isNaN(parsed)) {

@@ -155,6 +155,32 @@ describe('PlannerExecutorAgent search submission parity', () => {
         verify: [{ predicate: 'url_contains', args: ['/search'] }],
       })
     ).toBe(true);
+
+    expect(
+      isUrlChangeRelevantToIntent(
+        'https://www.amazon.com/s?k=noise+canceling+earbuds',
+        'https://www.amazon.com/ref=nav_logo_prime',
+        {
+          action: 'CLICK',
+          intent: 'product link',
+          input: 'noise canceling earbuds',
+          verify: [],
+        }
+      )
+    ).toBe(false);
+
+    expect(
+      isUrlChangeRelevantToIntent(
+        'https://www.amazon.com/s?k=noise+canceling+earbuds',
+        'https://www.amazon.com/dp/B012345678',
+        {
+          action: 'CLICK',
+          intent: 'product link',
+          input: 'noise canceling earbuds',
+          verify: [],
+        }
+      )
+    ).toBe(true);
   });
 
   it('prefers Enter for search inputs and retries with the explicit submit control when the first URL change is unrelated', async () => {

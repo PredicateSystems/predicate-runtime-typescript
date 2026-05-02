@@ -108,6 +108,43 @@ describe('category-pruner', () => {
     expect(pruned.elements.map(element => element.id)).not.toContain(12);
   });
 
+  it('keeps Amazon-style searchbox fields in shopping tasks', () => {
+    const snapshot = makeSnapshot([
+      makeElement({
+        id: 30,
+        role: 'searchbox',
+        text: 'field-keywords',
+        name: 'field-keywords',
+        ariaLabel: 'Search Amazon',
+        importance: 220,
+        clickable: true,
+      }),
+      makeElement({
+        id: 31,
+        role: 'link',
+        text: 'Today Deals',
+        href: '/deals',
+        importance: 900,
+        clickable: true,
+      }),
+      makeElement({
+        id: 32,
+        role: 'link',
+        text: 'Privacy Policy',
+        href: '/privacy',
+        importance: 40,
+        clickable: true,
+      }),
+    ]);
+
+    const pruned = pruneSnapshotForTask(snapshot, {
+      goal: 'search for noise canceling earbuds then open a product',
+      category: PruningTaskCategory.SHOPPING,
+    });
+
+    expect(pruned.elements.map(element => element.id)).toContain(30);
+  });
+
   it('keeps form fields and submit controls for form-filling tasks', () => {
     const snapshot = makeSnapshot([
       makeElement({
