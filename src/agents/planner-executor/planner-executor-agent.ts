@@ -687,7 +687,7 @@ export class PlannerExecutorAgent {
     const startTime = Date.now();
 
     // Initialize run state
-    this.runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.runId = crypto.randomUUID();
     this.actionHistory = [];
     this.currentStepIndex = 0;
     this.tokenCollector.reset();
