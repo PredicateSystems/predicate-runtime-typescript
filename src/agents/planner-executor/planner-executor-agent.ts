@@ -64,6 +64,8 @@ import {
 import { ComposableHeuristics } from './composable-heuristics';
 import { normalizeTaskCategory, type TaskCategory } from './task-category';
 import { getCommonHint } from './common-hints';
+import type { ResolvedAgentProfile } from './profile-types';
+import { HeuristicHint } from './heuristic-hint';
 import {
   detectModalAppearance,
   detectModalDismissed,
@@ -464,6 +466,10 @@ export interface PlannerExecutorAgentOptions {
   intentHeuristics?: IntentHeuristics;
   /** Enable verbose logging */
   verbose?: boolean;
+  /** Resolved profile providing data-driven pruning, hints, and scoring overrides */
+  resolvedProfile?: ResolvedAgentProfile;
+  /** Callback invoked after each step with structured outcome (for learning extraction) */
+  onStepOutcome?: (outcome: StepOutcome, snapshotElements?: SnapshotElement[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +514,8 @@ export class PlannerExecutorAgent {
   private currentTaskCategory: TaskCategory | null = null;
   private tokenCollector = new TokenUsageCollector();
   private recoveryState: RecoveryState | null = null;
+  private resolvedProfile?: ResolvedAgentProfile;
+  private onStepOutcome?: (outcome: StepOutcome, snapshotElements?: SnapshotElement[]) => void;
 
   // Run state
   private runId: string | null = null;
@@ -528,6 +536,8 @@ export class PlannerExecutorAgent {
     this.composableHeuristics = new ComposableHeuristics({
       staticHeuristics: this.baseIntentHeuristics,
     });
+    this.resolvedProfile = options.resolvedProfile;
+    this.onStepOutcome = options.onStepOutcome;
   }
 
   // ---------------------------------------------------------------------------
@@ -691,12 +701,20 @@ export class PlannerExecutorAgent {
     this.actionHistory = [];
     this.currentStepIndex = 0;
     this.tokenCollector.reset();
-    this.currentTaskCategory = normalizeTaskCategory(options.category);
+    this.currentTaskCategory =
+      normalizeTaskCategory(options.category) ?? this.resolvedProfile?.categoryHint ?? null;
     this.composableHeuristics = new ComposableHeuristics({
       staticHeuristics: this.baseIntentHeuristics,
       taskCategory: this.currentTaskCategory,
     });
-    this.composableHeuristics.clearStepHints();
+    // Seed heuristics with profile hints (if any)
+    if (this.resolvedProfile?.heuristicHints && this.resolvedProfile.heuristicHints.length > 0) {
+      this.composableHeuristics.setStepHints(
+        this.resolvedProfile.heuristicHints.map(h => new HeuristicHint(h))
+      );
+    } else {
+      this.composableHeuristics.clearStepHints();
+    }
     this.recoveryState = this.config.recovery.enabled
       ? new RecoveryState(this.config.recovery)
       : null;
@@ -985,6 +1003,13 @@ export class PlannerExecutorAgent {
         );
         let finalOutcome = outcome;
         stepOutcomes.push(finalOutcome);
+
+        // Emit structured step outcome for learning extraction
+        try {
+          this.onStepOutcome?.(finalOutcome, ctx.snapshot?.elements);
+        } catch {
+          // Don't fail the run on callback errors
+        }
 
         // Update current URL
         let urlAfter = await runtime.getCurrentUrl();
@@ -1873,6 +1898,8 @@ export class PlannerExecutorAgent {
               relaxationLevel: step?.relaxPruning ? 1 : 0,
               minElementCount: cfg.pruningMinElements,
               maxRelaxation: cfg.pruningMaxRelaxation,
+              profilePolicy: this.resolvedProfile?.pruningPolicy,
+              learnedFingerprints: this.resolvedProfile?.learnedFingerprints,
             });
             pruningCategory = pruned.category;
             prunedNodeCount = pruned.actionableElementCount;
@@ -1997,6 +2024,8 @@ export class PlannerExecutorAgent {
                     relaxationLevel: step?.relaxPruning ? 1 : 0,
                     minElementCount: cfg.pruningMinElements,
                     maxRelaxation: cfg.pruningMaxRelaxation,
+                    profilePolicy: this.resolvedProfile?.pruningPolicy,
+                    learnedFingerprints: this.resolvedProfile?.learnedFingerprints,
                   });
                   pruningCategory = pruned.category;
                   prunedNodeCount = pruned.actionableElementCount;

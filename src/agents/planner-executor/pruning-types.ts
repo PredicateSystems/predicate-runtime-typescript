@@ -1,4 +1,5 @@
 import type { Snapshot, SnapshotElement } from './plan-models';
+import type { DataDrivenPruningPolicy, LearnedTargetFingerprint } from './profile-types';
 
 export enum PruningTaskCategory {
   SHOPPING = 'shopping',
@@ -23,6 +24,10 @@ export interface PruneSnapshotOptions {
   goal: string;
   category: PruningTaskCategory;
   relaxationLevel?: number;
+  /** Optional data-driven pruning policy from a resolved BrowserAgentProfile */
+  profilePolicy?: DataDrivenPruningPolicy;
+  /** Optional learned fingerprints for fingerprint-boost scoring */
+  learnedFingerprints?: LearnedTargetFingerprint[];
 }
 
 export interface PruningRecoveryOptions extends PruneSnapshotOptions {

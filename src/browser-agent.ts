@@ -89,3 +89,49 @@ export {
   type AgentRuntime,
   type IntentHeuristics,
 } from './agents/planner-executor/planner-executor-agent';
+
+// Profile and learning exports
+export {
+  type BrowserAgentProfile,
+  type DataDrivenPruningPolicy,
+  type ResolvedAgentProfile,
+  type LearnedTargetFingerprint,
+  type DomainProfile,
+  EMPTY_RESOLVED_PROFILE,
+} from './agents/planner-executor/profile-types';
+export {
+  BrowserAgentProfileSchema,
+  BrowserAgentProfileArraySchema,
+} from './agents/planner-executor/profile-schema';
+export { ProfileRegistry } from './agents/planner-executor/profile-registry';
+export { pruneWithPolicy } from './agents/planner-executor/data-driven-pruner';
+export {
+  computeTaskHash,
+  extractDomain,
+  createFingerprint,
+  mergeFingerprint,
+  recordFingerprintFailure,
+} from './agents/planner-executor/fingerprint-normalizer';
+export type { LearningStore } from './agents/planner-executor/learning-store';
+export { InMemoryLearningStore } from './agents/planner-executor/learning-store';
+export {
+  detectPruningCategory,
+  pruneSnapshotForTask,
+} from './agents/planner-executor/category-pruner';
+export {
+  type PruningTaskCategory,
+  type PruneSnapshotOptions,
+} from './agents/planner-executor/pruning-types';
+export {
+  isSensitiveUrl,
+  extractFingerprintFromOutcome,
+  applyFingerprintFailure,
+  applyFingerprintSuccess,
+  isFingerprintStale,
+  isFingerprintExpired,
+  fingerprintToHint,
+} from './agents/planner-executor/learning-extractor';
+export type {
+  LearningExtractionOptions,
+  LearningExtractionResult,
+} from './agents/planner-executor/learning-extractor';

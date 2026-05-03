@@ -158,6 +158,45 @@ export {
   type IntentHeuristics,
 } from './planner-executor-agent';
 
+// Profiles (extensible categories + task learning)
+export type {
+  DataDrivenPruningPolicy,
+  BrowserAgentProfile,
+  ResolvedAgentProfile,
+  LearnedTargetFingerprint,
+  DomainProfile,
+} from './profile-types';
+export { EMPTY_RESOLVED_PROFILE } from './profile-types';
+export {
+  DataDrivenPruningPolicySchema,
+  BrowserAgentProfileSchema,
+  BrowserAgentProfileArraySchema,
+  LearnedTargetFingerprintSchema,
+  DomainProfileSchema,
+} from './profile-schema';
+export { ProfileRegistry } from './profile-registry';
+export { pruneWithPolicy } from './data-driven-pruner';
+export {
+  computeTaskHash,
+  extractDomain,
+  createFingerprint,
+  mergeFingerprint,
+  recordFingerprintFailure,
+} from './fingerprint-normalizer';
+export type { LearningStore } from './learning-store';
+export { InMemoryLearningStore } from './learning-store';
+export {
+  isSensitiveUrl,
+  extractFingerprintFromOutcome,
+  applyFingerprintFailure,
+  applyFingerprintSuccess,
+  isFingerprintStale,
+  isFingerprintExpired,
+  fingerprintToHint,
+  computeTaskHash as computeLearningTaskHash,
+} from './learning-extractor';
+export type { LearningExtractionOptions, LearningExtractionResult } from './learning-extractor';
+
 // Runtime (Playwright/Chromium)
 export {
   PlaywrightRuntime,
