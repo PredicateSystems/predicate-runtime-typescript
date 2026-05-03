@@ -78,7 +78,6 @@ import type { Tracer } from '../../tracing/tracer';
 import {
   isTextExtractionTask,
   isExtractionTask,
-  getExtractionDomainGuidance,
   buildExtractionPrompt,
 } from './extraction-keywords';
 
@@ -1161,12 +1160,24 @@ export class PlannerExecutorAgent {
 
         // Record action history after any auth-boundary or optional-substep recovery.
         if (!actionHistoryRecorded) {
+          // For EXTRACT actions, include the extracted data so the planner
+          // knows what was already extracted and can avoid repeating
+          const extractedText =
+            plannerAction.action === 'EXTRACT' && finalOutcome.extractedData
+              ? typeof finalOutcome.extractedData === 'object' &&
+                finalOutcome.extractedData !== null &&
+                'text' in (finalOutcome.extractedData as Record<string, unknown>)
+                ? ((finalOutcome.extractedData as Record<string, unknown>).text as string)
+                : JSON.stringify(finalOutcome.extractedData)
+              : undefined;
+
           this.actionHistory.push({
             stepNum,
             action: plannerAction.action,
             target: this.summarizePlannerActionTarget(plannerAction),
             result: finalOutcome.status === StepStatus.SUCCESS ? 'success' : 'failed',
             urlAfter,
+            extractedData: extractedText || undefined,
           });
         }
 
@@ -1180,6 +1191,26 @@ export class PlannerExecutorAgent {
             finalOutcome.status === StepStatus.SUCCESS &&
             (await this.isCartAdditionTerminal(runtime, task, plannerAction))
           ) {
+            success = true;
+          }
+
+          // Auto-complete extraction tasks: if the action was a successful EXTRACT
+          // and the overall task is an extraction task, the goal is achieved.
+          // This prevents infinite EXTRACT loops on extraction-focused tasks.
+          // Uses isTextExtractionTask (comprehensive) rather than isExtractionTask (simpler)
+          // to cover more extraction patterns across any website.
+          if (
+            !success &&
+            plannerAction.action === 'EXTRACT' &&
+            finalOutcome.status === StepStatus.SUCCESS &&
+            finalOutcome.extractedData &&
+            isTextExtractionTask(task)
+          ) {
+            if (this.config.verbose) {
+              console.log(
+                `[EXTRACT] Extraction task completed successfully, transitioning to DONE`
+              );
+            }
             success = true;
           }
 

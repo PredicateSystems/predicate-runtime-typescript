@@ -208,9 +208,12 @@ export function isTextExtractionTask(task: string): boolean {
  * @returns Tuple of [systemPrompt, userPrompt]
  */
 export function buildExtractionPrompt(pageContent: string, extractQuery: string): [string, string] {
-  const system = `You extract specific text from page content. Return only the extracted text.`;
+  // NOTE: /no_think MUST be at the START of user message for Qwen3 models.
+  // Without it, Qwen3 puts the answer in <think/> tags and content is empty.
+  const system = `You extract specific text from page content. Return only the extracted text. Do NOT output any thinking, reasoning, or explanation.`;
 
-  const user = `You are a text extraction assistant. Given the page content below, extract the specific information requested.
+  const user = `/no_think
+You are a text extraction assistant. Given the page content below, extract the specific information requested.
 
 PAGE CONTENT:
 ${pageContent}
@@ -246,7 +249,10 @@ export function isExtractionTask(task: string): boolean {
     taskLower.includes('title of') ||
     taskLower.includes('price of') ||
     taskLower.includes('name of') ||
-    taskLower.includes('content of')
+    taskLower.includes('content of') ||
+    taskLower.includes('headline of') ||
+    taskLower.includes('rating of') ||
+    taskLower.includes('review of')
   );
 }
 

@@ -395,14 +395,11 @@ export class OllamaProvider extends LocalLLMProvider {
     options: Record<string, any> = {}
   ): Promise<LLMResponse> {
     // For Qwen3 models, add think: false to disable reasoning output
-    // Ollama OpenAI-compatible API passes model options via 'options' field
+    // Ollama OpenAI-compatible API expects 'think' as a TOP-LEVEL field,
+    // NOT nested under 'options'. See: https://github.com/ollama/ollama/blob/main/docs/openai.md
     const ollamaOptions = { ...options };
     if (this._disableThinking) {
-      // Merge with existing options if any
-      ollamaOptions.options = {
-        ...(ollamaOptions.options || {}),
-        think: false,
-      };
+      ollamaOptions.think = false;
     }
     return super.generate(systemPrompt, userPrompt, ollamaOptions);
   }

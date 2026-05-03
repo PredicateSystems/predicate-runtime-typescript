@@ -40,6 +40,9 @@ export function buildStepwisePlannerPrompt(
       if (rec.urlAfter) {
         historyText += ` [URL: ${rec.urlAfter.slice(0, 60)}...]`;
       }
+      if (rec.extractedData) {
+        historyText += ` [EXTRACTED: ${rec.extractedData.slice(0, 120)}]`;
+      }
       historyText += '\n';
     }
     historyText += '\n';
