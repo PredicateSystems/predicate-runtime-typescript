@@ -169,6 +169,56 @@ function repairJson(text: string): string {
 }
 
 /**
+ * Extract the first balanced JSON object from a string.
+ *
+ * Handles cases where the LLM outputs multiple concatenated JSON objects:
+ *   {"action":"EXTRACT",...},{"action":"CLICK",...}
+ *
+ * Uses brace-depth counting to find the first complete `{...}` block.
+ *
+ * @returns The first balanced JSON object string, or null if not found
+ */
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (ch === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Extract JSON from LLM response that may contain markdown or prose.
  *
  * Handles:
@@ -203,6 +253,24 @@ export function extractJson(content: string): Record<string, unknown> {
   }
 
   // Try to find JSON object in text
+  // First try to extract just the FIRST balanced JSON object to handle
+  // cases where LLM outputs multiple objects like: {"action":"EXTRACT",...},{"action":"CLICK",...}
+  const firstObj = extractFirstJsonObject(cleaned);
+  if (firstObj) {
+    try {
+      return JSON.parse(firstObj);
+    } catch {
+      // Try to repair common JSON issues: unquoted keys (valid JS but not valid JSON)
+      try {
+        const repaired = repairJson(firstObj);
+        return JSON.parse(repaired);
+      } catch {
+        // Continue to last resort
+      }
+    }
+  }
+
+  // Fallback: greedy match (original behavior)
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   if (jsonMatch) {
     try {

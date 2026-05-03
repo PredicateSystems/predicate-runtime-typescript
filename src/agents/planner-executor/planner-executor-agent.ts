@@ -75,6 +75,12 @@ import {
 import { detectPruningCategory } from './category-pruner';
 import { pruneWithRecovery, fullSnapshotContainsIntent } from './pruning-recovery';
 import type { Tracer } from '../../tracing/tracer';
+import {
+  isTextExtractionTask,
+  isExtractionTask,
+  getExtractionDomainGuidance,
+  buildExtractionPrompt,
+} from './extraction-keywords';
 
 // ---------------------------------------------------------------------------
 // Token Usage Collector
@@ -442,6 +448,9 @@ export interface AgentRuntime {
 
   /** Scroll by delta (returns true if scroll was effective) */
   scrollBy(dy: number): Promise<boolean>;
+
+  /** Read page content as markdown (for EXTRACT actions) */
+  readMarkdown?(options?: { maxChars?: number }): Promise<string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,6 +1502,149 @@ export class PlannerExecutorAgent {
       };
     }
 
+    // Handle EXTRACT action — read page content and extract data via LLM
+    if (plannerAction.action === 'EXTRACT') {
+      const extractQuery =
+        plannerAction.goal ||
+        plannerAction.intent ||
+        plannerAction.target ||
+        task ||
+        'Extract relevant data from the current page';
+
+      if (this.config.verbose) {
+        console.log(`[ACTION] EXTRACT - query: "${extractQuery}"`);
+      }
+
+      try {
+        // Determine extraction path
+        const useMarkdown = isTextExtractionTask(extractQuery);
+
+        if (useMarkdown && runtime.readMarkdown) {
+          // Text-based extraction: read page as markdown, then use executor LLM
+          const pageContent = await runtime.readMarkdown({ maxChars: 8000 });
+
+          if (!pageContent) {
+            return {
+              stepId: stepNum,
+              goal: extractQuery,
+              status: StepStatus.FAILED,
+              actionTaken: 'EXTRACT',
+              verificationPassed: false,
+              usedVision: false,
+              durationMs: Date.now() - stepStart,
+              error: 'Failed to read page content as markdown',
+            };
+          }
+
+          if (this.config.verbose) {
+            const preview = pageContent.slice(0, 160).replace(/\n/g, ' ');
+            console.log(`  [ACTION] EXTRACT - got markdown: ${preview}...`);
+          }
+
+          // Build extraction prompt and call executor LLM
+          const [extSystem, extUser] = buildExtractionPrompt(pageContent, extractQuery);
+          const extractResp = await this.executor.generate(extSystem, extUser, {
+            temperature: 0.0,
+            max_tokens: 500,
+          });
+          this.recordTokenUsage('extract', extractResp);
+
+          const extractedText = (extractResp.content || '').trim();
+          if (extractedText && extractedText !== 'NOT_FOUND') {
+            if (this.config.verbose) {
+              console.log(`  [ACTION] EXTRACT ok: ${extractedText.slice(0, 160)}`);
+            }
+            return {
+              stepId: stepNum,
+              goal: extractQuery,
+              status: StepStatus.SUCCESS,
+              actionTaken: 'EXTRACT',
+              verificationPassed: true,
+              usedVision: false,
+              durationMs: Date.now() - stepStart,
+              urlBefore: currentUrl,
+              urlAfter: currentUrl,
+              extractedData: { text: extractedText, query: extractQuery },
+            };
+          } else {
+            return {
+              stepId: stepNum,
+              goal: extractQuery,
+              status: StepStatus.FAILED,
+              actionTaken: 'EXTRACT',
+              verificationPassed: false,
+              usedVision: false,
+              durationMs: Date.now() - stepStart,
+              error: `Could not find requested data: ${extractQuery}`,
+            };
+          }
+        } else {
+          // Fallback: use compact snapshot context for extraction
+          const pageContent = ctx.compactRepresentation;
+          if (!pageContent || pageContent.trim().length === 0) {
+            return {
+              stepId: stepNum,
+              goal: extractQuery,
+              status: StepStatus.FAILED,
+              actionTaken: 'EXTRACT',
+              verificationPassed: false,
+              usedVision: false,
+              durationMs: Date.now() - stepStart,
+              error: 'No page content available for extraction',
+            };
+          }
+
+          const [extSystem, extUser] = buildExtractionPrompt(pageContent, extractQuery);
+          const extractResp = await this.executor.generate(extSystem, extUser, {
+            temperature: 0.0,
+            max_tokens: 500,
+          });
+          this.recordTokenUsage('extract', extractResp);
+
+          const extractedText = (extractResp.content || '').trim();
+          if (extractedText && extractedText !== 'NOT_FOUND') {
+            if (this.config.verbose) {
+              console.log(`  [ACTION] EXTRACT ok (snapshot): ${extractedText.slice(0, 160)}`);
+            }
+            return {
+              stepId: stepNum,
+              goal: extractQuery,
+              status: StepStatus.SUCCESS,
+              actionTaken: 'EXTRACT',
+              verificationPassed: true,
+              usedVision: false,
+              durationMs: Date.now() - stepStart,
+              urlBefore: currentUrl,
+              urlAfter: currentUrl,
+              extractedData: { text: extractedText, query: extractQuery },
+            };
+          } else {
+            return {
+              stepId: stepNum,
+              goal: extractQuery,
+              status: StepStatus.FAILED,
+              actionTaken: 'EXTRACT',
+              verificationPassed: false,
+              usedVision: false,
+              durationMs: Date.now() - stepStart,
+              error: `Could not extract requested data: ${extractQuery}`,
+            };
+          }
+        }
+      } catch (e) {
+        return {
+          stepId: stepNum,
+          goal: extractQuery,
+          status: StepStatus.FAILED,
+          actionTaken: 'EXTRACT',
+          verificationPassed: false,
+          usedVision: false,
+          durationMs: Date.now() - stepStart,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    }
+
     // For CLICK and TYPE_AND_SUBMIT, we need to find the element
     const isTypeAction = plannerAction.action === 'TYPE_AND_SUBMIT';
 
@@ -2397,6 +2549,10 @@ export class PlannerExecutorAgent {
     plannerAction: StepwisePlannerResponse
   ): StepwisePlannerResponse {
     if (plannerAction.action !== 'SCROLL' && plannerAction.action !== 'WAIT') {
+      return plannerAction;
+    }
+
+    if (isExtractionTask(task)) {
       return plannerAction;
     }
 

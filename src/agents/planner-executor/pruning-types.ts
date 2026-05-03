@@ -6,6 +6,7 @@ export enum PruningTaskCategory {
   FORM_FILLING = 'form_filling',
   SEARCH = 'search',
   CHECKOUT = 'checkout',
+  EXTRACTION = 'extraction',
   GENERIC = 'generic',
 }
 

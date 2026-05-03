@@ -216,6 +216,24 @@ export class LocalLLMProvider extends LLMProvider {
             // Don't extract NONE - if model is still reasoning, let it continue
           }
         }
+
+        // Final fallback: if no structured pattern matched, use the last
+        // non-empty line of reasoning as the content. This handles plain text
+        // answers from extraction tasks where the model thinks but doesn't
+        // produce content outside the reasoning field.
+        if (!content) {
+          const lines = message.reasoning.split('\n');
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i].trim();
+            if (line && !line.startsWith('```') && !line.startsWith('//')) {
+              content = line;
+              console.log(
+                `[LocalLLMProvider DEBUG] Extracted last reasoning line as content: ${content.slice(0, 100)}`
+              );
+              break;
+            }
+          }
+        }
       }
 
       const usage = data?.usage;

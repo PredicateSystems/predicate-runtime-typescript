@@ -6,6 +6,7 @@
  */
 
 import type { ActionRecord } from './plan-models';
+import { isExtractionTask, getExtractionDomainGuidance } from './extraction-keywords';
 
 // ---------------------------------------------------------------------------
 // Stepwise Planner Prompt (ReAct-style)
@@ -98,12 +99,15 @@ RULES:
 10. Do NOT return DONE until ALL parts of the goal are complete
 11. Never copy example URLs from these instructions. Only NAVIGATE to a URL from the user's task, the current page, or a visible element.`;
 
+  // Inject extraction-specific guidance when the goal is an extraction task
+  const extractionGuidance = isExtractionTask(goal) ? getExtractionDomainGuidance() : '';
+
   // NOTE: /no_think MUST be at the START of user message for Qwen3 models
   const user = `/no_think
 Goal: ${goal}
 
 Current URL: ${currentUrl}
-
+${extractionGuidance}
 ${historyText}Current page elements (ID|role|text|importance|clickable|...):
 ${pageContext}
 

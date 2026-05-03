@@ -438,6 +438,41 @@ export class PlaywrightRuntime implements AgentRuntime {
   }
 
   /**
+   * Read the current page content as cleaned markdown-like text.
+   * Uses innerText extraction and strips excessive whitespace.
+   */
+  async readMarkdown(options?: { maxChars?: number }): Promise<string | null> {
+    this.ensureStarted();
+
+    const page = this.browser.getPage();
+    if (!page) {
+      throw new Error('Page not available');
+    }
+
+    try {
+      const text = await page.locator('body').innerText({ timeout: 5000 });
+      const maxChars = options?.maxChars ?? 50000;
+      let result = text.replace(/\n{3,}/g, '\n\n').trim();
+      if (result.length > maxChars) {
+        result = result.slice(0, maxChars) + '\n\n[... content truncated ...]';
+      }
+      return result || null;
+    } catch {
+      // Fallback: use evaluate to get document body textContent
+      const text = await page.evaluate(() => {
+        const el = document.querySelector('body');
+        return el?.textContent ?? '';
+      });
+      const maxChars = options?.maxChars ?? 50000;
+      let result = text.replace(/\n{3,}/g, '\n\n').trim();
+      if (result.length > maxChars) {
+        result = result.slice(0, maxChars) + '\n\n[... content truncated ...]';
+      }
+      return result || null;
+    }
+  }
+
+  /**
    * Get the viewport height.
    */
   async getViewportHeight(): Promise<number> {

@@ -196,6 +196,13 @@ export {
   computeTaskHash as computeLearningTaskHash,
 } from './learning-extractor';
 export type { LearningExtractionOptions, LearningExtractionResult } from './learning-extractor';
+export {
+  TEXT_EXTRACTION_KEYWORDS,
+  isTextExtractionTask,
+  isExtractionTask,
+  getExtractionDomainGuidance,
+  buildExtractionPrompt,
+} from './extraction-keywords';
 
 // Runtime (Playwright/Chromium)
 export {
