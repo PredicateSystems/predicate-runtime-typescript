@@ -1,4 +1,5 @@
 import { HeuristicHint } from './heuristic-hint';
+import type { HeuristicHintInput } from './heuristic-hint';
 
 export const COMMON_HINTS = {
   add_to_cart: new HeuristicHint({
@@ -56,8 +57,20 @@ export const COMMON_HINTS = {
   }),
 } as const;
 
-export function getCommonHint(intent: string): HeuristicHint | null {
+/**
+ * Look up a heuristic hint by intent string.
+ *
+ * @param intent - The intent to look up (e.g., "add_to_cart", "book_flight")
+ * @param profileHints - Optional profile-provided hints to check after built-in hints
+ * @returns Matching HeuristicHint or null
+ */
+export function getCommonHint(
+  intent: string,
+  profileHints?: HeuristicHintInput[]
+): HeuristicHint | null {
   const normalized = intent.toLowerCase().replace(/[\s-]+/g, '_');
+
+  // Check built-in hints first
   const exactMatch = COMMON_HINTS[normalized as keyof typeof COMMON_HINTS];
   if (exactMatch) {
     return exactMatch;
@@ -66,6 +79,23 @@ export function getCommonHint(intent: string): HeuristicHint | null {
   for (const [key, hint] of Object.entries(COMMON_HINTS)) {
     if (normalized.includes(key) || key.includes(normalized)) {
       return hint;
+    }
+  }
+
+  // Check profile-provided hints
+  if (profileHints && profileHints.length > 0) {
+    for (const ph of profileHints) {
+      const pattern = ph.intentPattern ?? ph.intent_pattern ?? '';
+      const phNormalized = pattern.toLowerCase().replace(/[\s-]+/g, '_');
+      if (normalized.includes(phNormalized) || phNormalized.includes(normalized)) {
+        return new HeuristicHint({
+          intentPattern: pattern,
+          textPatterns: ph.textPatterns ?? ph.text_patterns,
+          roleFilter: ph.roleFilter ?? ph.role_filter,
+          attributePatterns: ph.attributePatterns ?? ph.attribute_patterns,
+          priority: ph.priority,
+        });
+      }
     }
   }
 

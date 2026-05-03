@@ -207,6 +207,48 @@ class TokenAccountingProvider extends LLMProvider {
   }
 }
 
+// Re-export planner-executor profile/learning types for extension consumption
+export type {
+  DataDrivenPruningPolicy,
+  BrowserAgentProfile,
+  ResolvedAgentProfile,
+  LearnedTargetFingerprint,
+  DomainProfile,
+} from './planner-executor/profile-types';
+export { EMPTY_RESOLVED_PROFILE } from './planner-executor/profile-types';
+export {
+  DataDrivenPruningPolicySchema,
+  BrowserAgentProfileSchema,
+  BrowserAgentProfileArraySchema,
+  LearnedTargetFingerprintSchema,
+  DomainProfileSchema,
+} from './planner-executor/profile-schema';
+export { ProfileRegistry } from './planner-executor/profile-registry';
+export { pruneWithPolicy } from './planner-executor/data-driven-pruner';
+export {
+  computeTaskHash,
+  extractDomain,
+  createFingerprint,
+  mergeFingerprint,
+  recordFingerprintFailure,
+} from './planner-executor/fingerprint-normalizer';
+export type { LearningStore } from './planner-executor/learning-store';
+export { InMemoryLearningStore } from './planner-executor/learning-store';
+export {
+  extractFingerprintFromOutcome,
+  applyFingerprintFailure,
+  applyFingerprintSuccess,
+  isFingerprintStale,
+  isFingerprintExpired,
+  fingerprintToHint,
+  computeTaskHash as computeAsyncTaskHash,
+  isSensitiveUrl as isLearningSensitiveUrl,
+} from './planner-executor/learning-extractor';
+export type {
+  LearningExtractionOptions,
+  LearningExtractionResult,
+} from './planner-executor/learning-extractor';
+
 export type StepOutcome = { stepGoal: string; ok: boolean };
 
 export class PredicateBrowserAgent {

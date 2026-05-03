@@ -6,6 +6,7 @@ import {
   type PrunedSnapshotContext,
 } from './pruning-types';
 import { TaskCategory } from './task-category';
+import { pruneWithPolicy } from './data-driven-pruner';
 
 function textOf(element: SnapshotElement): string {
   return String(element.text || element.name || '').toLowerCase();
@@ -270,6 +271,39 @@ export function pruneSnapshotForTask(
   options: PruneSnapshotOptions
 ): PrunedSnapshotContext {
   const relaxationLevel = Math.max(0, options.relaxationLevel || 0);
+
+  // Data-driven path: use profile policy if provided
+  if (options.profilePolicy) {
+    const { elements, maxNodes } = pruneWithPolicy(
+      snapshot,
+      options.profilePolicy,
+      options.goal,
+      relaxationLevel,
+      options.category,
+      options.learnedFingerprints
+    );
+    const actionableElementCount = selectContextElements(elements, elements.length || 1).length;
+
+    return {
+      category: options.category,
+      snapshot,
+      elements,
+      promptBlock: formatPrunedContext({
+        category: options.category,
+        elements,
+        relaxationLevel,
+        rawElementCount: snapshot.elements.length,
+        prunedElementCount: elements.length,
+        actionableElementCount,
+      }),
+      relaxationLevel,
+      rawElementCount: snapshot.elements.length,
+      prunedElementCount: elements.length,
+      actionableElementCount,
+    };
+  }
+
+  // Built-in category path
   const policy = getPolicy(options.category, relaxationLevel);
   const filtered = (snapshot.elements || []).filter(element => {
     if (policy.block(element)) {
