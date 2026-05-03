@@ -168,7 +168,7 @@ export interface RepairHistoryEntry {
 export interface ActionRecord {
   /** Step number (1-indexed) */
   stepNum: number;
-  /** Action type (CLICK, TYPE_AND_SUBMIT, SCROLL, etc.) */
+  /** Action type (CLICK, TYPE_AND_SUBMIT, SCROLL, EXTRACT, etc.) */
   action: string;
   /** Element description or URL */
   target: string | null;
@@ -176,6 +176,8 @@ export interface ActionRecord {
   result: string;
   /** URL after action completed */
   urlAfter: string | null;
+  /** Extracted data for EXTRACT actions (the text that was extracted) */
+  extractedData?: string | null;
 }
 
 // ---------------------------------------------------------------------------

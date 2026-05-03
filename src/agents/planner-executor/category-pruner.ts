@@ -7,6 +7,7 @@ import {
 } from './pruning-types';
 import { TaskCategory } from './task-category';
 import { pruneWithPolicy } from './data-driven-pruner';
+import { isTextExtractionTask } from './extraction-keywords';
 
 function textOf(element: SnapshotElement): string {
   return String(element.text || element.name || '').toLowerCase();
@@ -141,6 +142,39 @@ function allowSearchRelaxed(element: SnapshotElement): boolean {
   return ['button', 'tab', 'menuitem'].includes(roleOf(element));
 }
 
+function allowExtraction(element: SnapshotElement): boolean {
+  const role = roleOf(element);
+  // Nav links are critical for navigating to the data page (e.g., "Show" link on HN)
+  if (role === 'link' && element.href) {
+    return true;
+  }
+  // Search inputs for finding data
+  if (['searchbox', 'textbox', 'combobox'].includes(role)) {
+    return true;
+  }
+  // Buttons for navigation/actions
+  if (role === 'button') {
+    return true;
+  }
+  // Content-bearing elements (table cells, list items, etc.)
+  if (['cell', 'row', 'listitem', 'heading'].includes(role)) {
+    return true;
+  }
+  // High-importance elements likely contain relevant data
+  if (element.importance && element.importance >= 200) {
+    return true;
+  }
+  // Dominant group elements (main content area)
+  if (element.inDominantGroup) {
+    return true;
+  }
+  return false;
+}
+
+function allowExtractionRelaxed(element: SnapshotElement): boolean {
+  return allowExtraction(element) || isInteractive(element);
+}
+
 function allowGeneric(element: SnapshotElement): boolean {
   return ['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio'].includes(
     roleOf(element)
@@ -209,6 +243,14 @@ function getPolicy(
     return { maxNodes: 60, allow: allowShoppingLoose, block: () => false };
   }
 
+  if (category === PruningTaskCategory.EXTRACTION) {
+    // Extraction tasks need: nav links for navigation, content elements for data,
+    // search inputs, and any interactive elements for reaching the data.
+    return relaxationLevel === 0
+      ? { maxNodes: 35, allow: allowExtraction, block: blockCommon }
+      : { maxNodes: 50, allow: allowExtractionRelaxed, block: () => false };
+  }
+
   if (category === PruningTaskCategory.FORM_FILLING) {
     return relaxationLevel === 0
       ? { maxNodes: 20, allow: allowFormFilling, block: blockCommon }
@@ -232,12 +274,23 @@ export function detectPruningCategory(
 ): PruningTaskCategory | null {
   const normalizedGoal = goal.toLowerCase();
 
+  if (taskCategory === TaskCategory.EXTRACTION) {
+    return PruningTaskCategory.EXTRACTION;
+  }
   if (taskCategory === TaskCategory.SEARCH) {
     return PruningTaskCategory.SEARCH;
   }
   if (taskCategory === TaskCategory.FORM_FILL) {
     return PruningTaskCategory.FORM_FILLING;
   }
+
+  // Extraction keyword detection takes priority over TRANSACTION/SHOPPING
+  // because "find the title of X" or "extract Y" on an e-commerce site is
+  // still an extraction task, not a shopping task.
+  if (isTextExtractionTask(normalizedGoal)) {
+    return PruningTaskCategory.EXTRACTION;
+  }
+
   if (taskCategory === TaskCategory.TRANSACTION) {
     if (normalizedGoal.includes('checkout')) {
       return PruningTaskCategory.CHECKOUT;
