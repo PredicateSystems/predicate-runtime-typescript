@@ -72,6 +72,10 @@ export interface RetryConfig {
   executorRepairAttempts: number;
   /** Maximum replan attempts (default: 2) */
   maxReplans: number;
+  /** Base delay in ms for LLM 429 rate-limit retries (default: 5000) */
+  llmRetryBackoffMs: number;
+  /** Maximum retries for LLM 429 errors before giving up (default: 3) */
+  llmMaxRetries: number;
 }
 
 /**
@@ -153,6 +157,8 @@ export const DEFAULT_CONFIG: PlannerExecutorConfig = {
     verifyMaxAttempts: 4,
     executorRepairAttempts: 2,
     maxReplans: 2,
+    llmRetryBackoffMs: 5000,
+    llmMaxRetries: 3,
   },
   stepwise: {
     maxSteps: 20,
@@ -221,8 +227,8 @@ export function getConfigPreset(preset: ConfigPreset | string): PlannerExecutorC
           limitMax: 400, // Higher max for complex pages (was 200)
         },
         retry: {
+          ...DEFAULT_CONFIG.retry,
           verifyTimeoutMs: 15000,
-          verifyPollMs: 500,
           verifyMaxAttempts: 6,
           executorRepairAttempts: 3,
           maxReplans: 2,
@@ -246,8 +252,8 @@ export function getConfigPreset(preset: ConfigPreset | string): PlannerExecutorC
       return {
         ...DEFAULT_CONFIG,
         retry: {
+          ...DEFAULT_CONFIG.retry,
           verifyTimeoutMs: 10000,
-          verifyPollMs: 500,
           verifyMaxAttempts: 4,
           executorRepairAttempts: 2,
           maxReplans: 2,
@@ -265,8 +271,8 @@ export function getConfigPreset(preset: ConfigPreset | string): PlannerExecutorC
       return {
         ...DEFAULT_CONFIG,
         retry: {
+          ...DEFAULT_CONFIG.retry,
           verifyTimeoutMs: 5000,
-          verifyPollMs: 500,
           verifyMaxAttempts: 2,
           executorRepairAttempts: 1,
           maxReplans: 1,
@@ -285,8 +291,8 @@ export function getConfigPreset(preset: ConfigPreset | string): PlannerExecutorC
       return {
         ...DEFAULT_CONFIG,
         retry: {
+          ...DEFAULT_CONFIG.retry,
           verifyTimeoutMs: 20000,
-          verifyPollMs: 500,
           verifyMaxAttempts: 8,
           executorRepairAttempts: 3,
           maxReplans: 3,

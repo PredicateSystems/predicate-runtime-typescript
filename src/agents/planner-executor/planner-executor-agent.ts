@@ -831,7 +831,7 @@ export class PlannerExecutorAgent {
 
           let plannerResp: LLMResponse | null = null;
           try {
-            plannerResp = await this.planner.generate(systemPrompt, userPrompt, {
+            plannerResp = await this.callPlannerWithRetry(systemPrompt, userPrompt, {
               temperature: this.config.plannerTemperature,
               max_tokens: this.config.plannerMaxTokens,
             });
@@ -1212,6 +1212,54 @@ export class PlannerExecutorAgent {
       tokenUsage: this.tokenCollector.summary(),
       fallbackUsed,
     };
+  }
+
+  /**
+   * Call the planner LLM with retry and exponential backoff for 429 rate-limit errors.
+   *
+   * Without this, a single 429 burns an entire step. With retry, we wait for the
+   * rate limit to reset (using the `retry-after` hint when available) and try again.
+   */
+  private async callPlannerWithRetry(
+    systemPrompt: string,
+    userPrompt: string,
+    options: { temperature: number; max_tokens: number }
+  ): Promise<LLMResponse> {
+    const { llmRetryBackoffMs, llmMaxRetries } = this.config.retry;
+
+    for (let attempt = 0; attempt <= llmMaxRetries; attempt++) {
+      try {
+        return await this.planner.generate(systemPrompt, userPrompt, options);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const is429 =
+          msg.includes('429') ||
+          msg.toLowerCase().includes('rate_limit') ||
+          msg.toLowerCase().includes('rate limit');
+
+        if (!is429 || attempt >= llmMaxRetries) {
+          throw err;
+        }
+
+        // Try to extract retry-after from error message (Groq includes "try again in X.XXs")
+        const retryMatch = msg.match(/try again in ([\d.]+)\s*s/i);
+        let delayMs = llmRetryBackoffMs * Math.pow(2, attempt);
+        if (retryMatch) {
+          delayMs = Math.max(delayMs, Math.ceil(parseFloat(retryMatch[1]) * 1000) + 500);
+        }
+
+        if (this.config.verbose) {
+          console.log(
+            `[PLANNER RETRY] 429 rate limit hit (attempt ${attempt + 1}/${llmMaxRetries}), waiting ${Math.round(delayMs / 1000)}s...`
+          );
+        }
+
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    // Should never reach here, but TypeScript needs it
+    throw new Error('Planner retry exhausted');
   }
 
   private shouldAbortOnPlannerFailure(message: string): boolean {
