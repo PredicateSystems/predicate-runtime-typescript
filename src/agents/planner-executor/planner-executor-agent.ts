@@ -470,6 +470,13 @@ export interface PlannerExecutorAgentOptions {
   resolvedProfile?: ResolvedAgentProfile;
   /** Callback invoked after each step with structured outcome (for learning extraction) */
   onStepOutcome?: (outcome: StepOutcome, snapshotElements?: SnapshotElement[]) => void;
+  /** Callback invoked at the start of each step with progress info (step number, token usage) */
+  onProgress?: (progress: {
+    step: number;
+    maxSteps: number;
+    totalTokens: number;
+    action?: string;
+  }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +523,12 @@ export class PlannerExecutorAgent {
   private recoveryState: RecoveryState | null = null;
   private resolvedProfile?: ResolvedAgentProfile;
   private onStepOutcome?: (outcome: StepOutcome, snapshotElements?: SnapshotElement[]) => void;
+  private onProgress?: (progress: {
+    step: number;
+    maxSteps: number;
+    totalTokens: number;
+    action?: string;
+  }) => void;
 
   // Run state
   private runId: string | null = null;
@@ -538,6 +551,7 @@ export class PlannerExecutorAgent {
     });
     this.resolvedProfile = options.resolvedProfile;
     this.onStepOutcome = options.onStepOutcome;
+    this.onProgress = options.onProgress;
   }
 
   // ---------------------------------------------------------------------------
@@ -759,6 +773,18 @@ export class PlannerExecutorAgent {
           console.log(`\n${'='.repeat(60)}`);
           console.log(`[STEP ${stepNum}/${maxSteps}]`);
           console.log(`${'='.repeat(60)}`);
+        }
+
+        // Emit progress callback
+        try {
+          const tokenSummary = this.tokenCollector.summary();
+          this.onProgress?.({
+            step: stepNum,
+            maxSteps,
+            totalTokens: tokenSummary.total.totalTokens,
+          });
+        } catch {
+          // Don't fail the run on progress callback errors
         }
 
         // Take snapshot with escalation
