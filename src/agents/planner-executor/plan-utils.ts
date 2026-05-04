@@ -477,6 +477,13 @@ function normalizeStep(step: Record<string, unknown>): Record<string, unknown> {
   if ('target' in normalizedStep && typeof normalizedStep.target === 'number') {
     normalizedStep.target = String(normalizedStep.target);
   }
+  if (
+    'target' in normalizedStep &&
+    typeof normalizedStep.target === 'object' &&
+    normalizedStep.target !== null
+  ) {
+    normalizedStep.target = JSON.stringify(normalizedStep.target);
+  }
   if ('target' in normalizedStep && normalizedStep.target === null) {
     delete normalizedStep.target;
   }
@@ -629,33 +636,36 @@ export function validatePlanSmoothness(plan: Plan): string[] {
 
   // Check each step
   let prevAction: string | null = null;
+  let prevId: number | undefined = undefined;
   for (const step of plan.steps) {
+    const stepLabel = step.id ?? '?';
     // Check for missing verification
     if ((!step.verify || step.verify.length === 0) && step.required !== false) {
-      warnings.push(`Step ${step.id} has no verification predicates`);
+      warnings.push(`Step ${stepLabel} has no verification predicates`);
     }
 
     // Check for consecutive same actions (might indicate loop)
     if (step.action === prevAction && step.action === 'CLICK') {
-      warnings.push(`Steps ${step.id - 1} and ${step.id} both use ${step.action}`);
+      warnings.push(`Steps ${prevId ?? '?'} and ${stepLabel} both use ${step.action}`);
     }
 
     // Check for NAVIGATE without target
     if (step.action === 'NAVIGATE' && !step.target) {
-      warnings.push(`Step ${step.id} is NAVIGATE but has no target URL`);
+      warnings.push(`Step ${stepLabel} is NAVIGATE but has no target URL`);
     }
 
     // Check for CLICK without intent
     if (step.action === 'CLICK' && !step.intent) {
-      warnings.push(`Step ${step.id} is CLICK but has no intent hint`);
+      warnings.push(`Step ${stepLabel} is CLICK but has no intent hint`);
     }
 
     // Check for TYPE_AND_SUBMIT without input
     if (step.action === 'TYPE_AND_SUBMIT' && !step.input) {
-      warnings.push(`Step ${step.id} is TYPE_AND_SUBMIT but has no input`);
+      warnings.push(`Step ${stepLabel} is TYPE_AND_SUBMIT but has no input`);
     }
 
     prevAction = step.action;
+    prevId = step.id;
   }
 
   return warnings;

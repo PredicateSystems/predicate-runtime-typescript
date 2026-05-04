@@ -62,7 +62,7 @@ import {
   isUrlChangeRelevantToIntent,
 } from './boundary-detection';
 import { ComposableHeuristics } from './composable-heuristics';
-import { normalizeTaskCategory, type TaskCategory } from './task-category';
+import { normalizeTaskCategory, TaskCategory } from './task-category';
 import { getCommonHint } from './common-hints';
 import type { ResolvedAgentProfile } from './profile-types';
 import { HeuristicHint } from './heuristic-hint';
@@ -485,6 +485,13 @@ export interface PlannerExecutorAgentOptions {
     totalTokens: number;
     action?: string;
   }) => void;
+  /**
+   * Pause gate: called at each step boundary.
+   * If it returns a Promise, the agent awaits it before proceeding (paused).
+   * Return a resolved promise to continue immediately (not paused).
+   * This enables pause/resume without AbortSignal.
+   */
+  pauseGate?: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +544,7 @@ export class PlannerExecutorAgent {
     totalTokens: number;
     action?: string;
   }) => void;
+  private pauseGate?: () => Promise<void>;
 
   // Run state
   private runId: string | null = null;
@@ -560,6 +568,7 @@ export class PlannerExecutorAgent {
     this.resolvedProfile = options.resolvedProfile;
     this.onStepOutcome = options.onStepOutcome;
     this.onProgress = options.onProgress;
+    this.pauseGate = options.pauseGate;
   }
 
   // ---------------------------------------------------------------------------
@@ -793,6 +802,11 @@ export class PlannerExecutorAgent {
           });
         } catch {
           // Don't fail the run on progress callback errors
+        }
+
+        // Pause gate: await if paused, continue immediately if not
+        if (this.pauseGate) {
+          await this.pauseGate();
         }
 
         // Take snapshot with escalation
@@ -1195,16 +1209,23 @@ export class PlannerExecutorAgent {
           }
 
           // Auto-complete extraction tasks: if the action was a successful EXTRACT
-          // and the overall task is an extraction task, the goal is achieved.
+          // with actual data, and the overall task is an extraction task, mark as done.
           // This prevents infinite EXTRACT loops on extraction-focused tasks.
-          // Uses isTextExtractionTask (comprehensive) rather than isExtractionTask (simpler)
-          // to cover more extraction patterns across any website.
+          // Guard: auto-complete if either (a) the task is purely extraction with no
+          // navigation/search keywords, or (b) at least one non-EXTRACT action has
+          // been performed already. This avoids premature completion on hybrid tasks
+          // like "Search for X and extract Y" while still auto-completing "Extract the
+          // title of the first post" when already on the right page.
+          const taskHasInteraction =
+            /\b(search|navigate|go to|click|add to|fill|submit|login|sign)\b/i.test(task);
+          const hasNonExtractAction = this.actionHistory.some(rec => rec.action !== 'EXTRACT');
           if (
             !success &&
             plannerAction.action === 'EXTRACT' &&
             finalOutcome.status === StepStatus.SUCCESS &&
             finalOutcome.extractedData &&
-            isTextExtractionTask(task)
+            isTextExtractionTask(task) &&
+            (!taskHasInteraction || hasNonExtractAction)
           ) {
             if (this.config.verbose) {
               console.log(
@@ -1247,6 +1268,13 @@ export class PlannerExecutorAgent {
         const recentFailures = stepOutcomes.slice(-3).filter(o => o.status === StepStatus.FAILED);
         if (recentFailures.length >= 3) {
           error = 'Too many consecutive failures';
+          break;
+        }
+
+        // Check for URL/action cycles (e.g., click → external site → navigate back → repeat)
+        const cycleDetected = this.detectActionCycle(this.actionHistory);
+        if (cycleDetected) {
+          error = cycleDetected;
           break;
         }
       }
@@ -1542,17 +1570,22 @@ export class PlannerExecutorAgent {
         task ||
         'Extract relevant data from the current page';
 
+      const stripThinkTags = (text: string): string =>
+        text
+          .replace(/<think[\s\S]*?<\/think>/gi, '')
+          .replace(/<think[\s\S]*$/gi, '')
+          .trim();
+
       if (this.config.verbose) {
         console.log(`[ACTION] EXTRACT - query: "${extractQuery}"`);
       }
 
       try {
-        // Determine extraction path
-        const useMarkdown = isTextExtractionTask(extractQuery);
+        const useMarkdown = runtime.readMarkdown != null;
 
         if (useMarkdown && runtime.readMarkdown) {
           // Text-based extraction: read page as markdown, then use executor LLM
-          const pageContent = await runtime.readMarkdown({ maxChars: 8000 });
+          const pageContent = await runtime.readMarkdown({ maxChars: 16000 });
 
           if (!pageContent) {
             return {
@@ -1568,19 +1601,21 @@ export class PlannerExecutorAgent {
           }
 
           if (this.config.verbose) {
-            const preview = pageContent.slice(0, 160).replace(/\n/g, ' ');
-            console.log(`  [ACTION] EXTRACT - got markdown: ${preview}...`);
+            console.log(`  [ACTION] EXTRACT - got markdown (${pageContent.length} chars):`);
+            console.log(pageContent.slice(0, 2000));
+            if (pageContent.length > 2000)
+              console.log(`  ... [truncated, ${pageContent.length - 2000} more chars]`);
           }
 
           // Build extraction prompt and call executor LLM
           const [extSystem, extUser] = buildExtractionPrompt(pageContent, extractQuery);
           const extractResp = await this.executor.generate(extSystem, extUser, {
             temperature: 0.0,
-            max_tokens: 500,
+            max_tokens: 1024,
           });
           this.recordTokenUsage('extract', extractResp);
 
-          const extractedText = (extractResp.content || '').trim();
+          const extractedText = stripThinkTags((extractResp.content || '').trim());
           if (extractedText && extractedText !== 'NOT_FOUND') {
             if (this.config.verbose) {
               console.log(`  [ACTION] EXTRACT ok: ${extractedText.slice(0, 160)}`);
@@ -1628,11 +1663,11 @@ export class PlannerExecutorAgent {
           const [extSystem, extUser] = buildExtractionPrompt(pageContent, extractQuery);
           const extractResp = await this.executor.generate(extSystem, extUser, {
             temperature: 0.0,
-            max_tokens: 500,
+            max_tokens: 1024,
           });
           this.recordTokenUsage('extract', extractResp);
 
-          const extractedText = (extractResp.content || '').trim();
+          const extractedText = stripThinkTags((extractResp.content || '').trim());
           if (extractedText && extractedText !== 'NOT_FOUND') {
             if (this.config.verbose) {
               console.log(`  [ACTION] EXTRACT ok (snapshot): ${extractedText.slice(0, 160)}`);
@@ -1871,6 +1906,25 @@ export class PlannerExecutorAgent {
           predicateSatisfied ||
           (!requiresNavigation && !hasVerificationPredicates) ||
           modalHandled;
+
+        if (
+          verificationPassed &&
+          (this.currentTaskCategory === TaskCategory.EXTRACTION || isTextExtractionTask(task))
+        ) {
+          const navigatedAway = this.urlHostKey(currentUrl) !== this.urlHostKey(urlAfter);
+          const clickWasOnListedData =
+            plannerAction.intent &&
+            /^(product|item|listing|result|article|post|link)/i.test(plannerAction.intent);
+          if (navigatedAway && clickWasOnListedData) {
+            verificationPassed = false;
+            if (this.config.verbose) {
+              console.log(
+                `[CLICK] Extraction task: click on "${plannerAction.intent}" navigated away from source page, marking as failed`
+              );
+            }
+          }
+        }
+
         let finalActionTaken = `CLICK(${elementId})`;
         let finalUrlAfter = urlAfter;
 
@@ -2526,9 +2580,24 @@ export class PlannerExecutorAgent {
           ? raw.action
           : 'DONE';
 
+    const isHumanReadable = (s: string) => !s.startsWith('http') && s !== 'stepwise_action';
+
+    const normalizedGoal =
+      typeof step.goal === 'string' && isHumanReadable(step.goal)
+        ? step.goal
+        : typeof step.intent === 'string'
+          ? step.intent
+          : typeof raw.goal === 'string' && isHumanReadable(raw.goal)
+            ? raw.goal
+            : typeof raw.intent === 'string'
+              ? raw.intent
+              : typeof step.target === 'string'
+                ? step.target
+                : undefined;
+
     return {
       id: typeof step.id === 'number' ? step.id : undefined,
-      goal: typeof step.goal === 'string' ? step.goal : undefined,
+      goal: normalizedGoal,
       action: normalizedAction.toUpperCase() as StepwisePlannerResponse['action'],
       target: typeof step.target === 'string' ? step.target : undefined,
       intent: typeof step.intent === 'string' ? step.intent : undefined,
@@ -2956,6 +3025,74 @@ export class PlannerExecutorAgent {
       return false;
     }
     return !href.startsWith('#') && !href.startsWith('javascript:');
+  }
+
+  private detectActionCycle(history: ActionRecord[]): string | null {
+    if (history.length < 4) {
+      return null;
+    }
+
+    const recent = history.slice(-6);
+
+    // Don't flag EXTRACT-only loops here — the extraction auto-complete
+    // or max-steps limit handles those. EXTRACT doesn't navigate so
+    // repeating it isn't a "cycle" in the navigation sense.
+    const nonExtractRecent = recent.filter(entry => entry.action !== 'EXTRACT');
+    if (nonExtractRecent.length < 4) {
+      return null;
+    }
+
+    const hosts = nonExtractRecent
+      .filter(entry => entry.urlAfter)
+      .map(entry => this.urlHostKey(entry.urlAfter!));
+
+    if (hosts.length < 4) {
+      return null;
+    }
+
+    const hostCounts = new Map<string, number>();
+    for (const host of hosts) {
+      hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
+    }
+
+    for (const [host, count] of hostCounts) {
+      if (count < 4) continue;
+
+      const sameHostEntries = nonExtractRecent.filter(
+        entry => entry.urlAfter && this.urlHostKey(entry.urlAfter) === host
+      );
+      const hasRepeatedAction = sameHostEntries.some(
+        (entry, idx) => idx > 0 && entry.action === sameHostEntries[0].action
+      );
+
+      if (hasRepeatedAction) {
+        return `Action cycle detected: visited ${host} ${count} times with repeated ${sameHostEntries[0].action} actions`;
+      }
+    }
+
+    // Alternating host detection — only flag if the sequence actually alternates
+    if (hostCounts.size === 2) {
+      const counts = [...hostCounts.values()];
+      if (counts.every(c => c >= 2) && hosts.length >= 4) {
+        // Verify strict alternation: no two consecutive entries are the same host
+        const strictlyAlternating = hosts.every((host, i) => i === 0 || host !== hosts[i - 1]);
+        if (strictlyAlternating) {
+          const [hostA, hostB] = [...hostCounts.keys()];
+          return `Action cycle detected: alternating between ${hostA} and ${hostB} (${hosts.length} navigations)`;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private urlHostKey(url: string): string {
+    try {
+      const parsed = new URL(url);
+      return parsed.hostname.replace(/^www\./, '');
+    } catch {
+      return url.split('/')[0] || url;
+    }
   }
 
   private findFallbackNavigationClickTarget(

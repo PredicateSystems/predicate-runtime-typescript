@@ -58,8 +58,8 @@ export type ActionType = z.infer<typeof ActionType>;
  * Type for a plan step.
  */
 export interface PlanStep {
-  id: number;
-  goal: string;
+  id?: number;
+  goal?: string;
   action: ActionType;
   target?: string;
   intent?: string;
@@ -87,12 +87,15 @@ const HeuristicHintSchema = z.object({
 
 export const PlanStepSchema = z.lazy(() =>
   z.object({
-    id: z.number().describe('Step ID (1-indexed, contiguous)'),
-    goal: z.string().describe('Human-readable goal for this step'),
+    id: z.number().optional().describe('Step ID (1-indexed, contiguous)'),
+    goal: z.string().optional().describe('Human-readable goal for this step'),
     action: ActionType.describe(
       'Action type: NAVIGATE, CLICK, TYPE, TYPE_AND_SUBMIT, SCROLL, PRESS, WAIT, EXTRACT, STUCK, DONE'
     ),
-    target: z.string().optional().describe('URL for NAVIGATE action'),
+    target: z
+      .union([z.string(), z.record(z.string(), z.unknown())])
+      .optional()
+      .describe('URL for NAVIGATE action'),
     intent: z.string().optional().describe('Intent hint for CLICK action'),
     input: z.string().optional().describe('Text for TYPE_AND_SUBMIT action'),
     verify: z.array(PredicateSpecSchema).default([]).describe('Verification predicates'),

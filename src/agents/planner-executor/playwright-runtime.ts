@@ -438,8 +438,9 @@ export class PlaywrightRuntime implements AgentRuntime {
   }
 
   /**
-   * Read the current page content as cleaned markdown-like text.
-   * Uses innerText extraction and strips excessive whitespace.
+   * Read the current page content as structured markdown.
+   * Uses the Sentience extension's read() method (convertToMarkdown) when available,
+   * falling back to innerText extraction.
    */
   async readMarkdown(options?: { maxChars?: number }): Promise<string | null> {
     this.ensureStarted();
@@ -449,21 +450,44 @@ export class PlaywrightRuntime implements AgentRuntime {
       throw new Error('Page not available');
     }
 
+    const maxChars = options?.maxChars ?? 50000;
+
+    try {
+      const hasSentience = await page.evaluate(
+        () => typeof (window as any).sentience?.read === 'function'
+      );
+
+      if (hasSentience) {
+        const result = await page.evaluate((max: number) => {
+          const readResult = (window as any).sentience.read({ format: 'markdown' });
+          if (readResult?.status === 'success' && readResult.content) {
+            let content = readResult.content;
+            if (content.length > max) {
+              content = content.slice(0, max) + '\n\n[... content truncated ...]';
+            }
+            return content;
+          }
+          return null;
+        }, maxChars);
+
+        if (result) return result;
+      }
+    } catch {
+      // Sentience extension not available, fall through
+    }
+
     try {
       const text = await page.locator('body').innerText({ timeout: 5000 });
-      const maxChars = options?.maxChars ?? 50000;
       let result = text.replace(/\n{3,}/g, '\n\n').trim();
       if (result.length > maxChars) {
         result = result.slice(0, maxChars) + '\n\n[... content truncated ...]';
       }
       return result || null;
     } catch {
-      // Fallback: use evaluate to get document body textContent
       const text = await page.evaluate(() => {
         const el = document.querySelector('body');
         return el?.textContent ?? '';
       });
-      const maxChars = options?.maxChars ?? 50000;
       let result = text.replace(/\n{3,}/g, '\n\n').trim();
       if (result.length > maxChars) {
         result = result.slice(0, maxChars) + '\n\n[... content truncated ...]';
