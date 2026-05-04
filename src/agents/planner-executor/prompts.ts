@@ -41,7 +41,11 @@ export function buildStepwisePlannerPrompt(
         historyText += ` [URL: ${rec.urlAfter.slice(0, 60)}...]`;
       }
       if (rec.extractedData) {
-        historyText += ` [EXTRACTED: ${rec.extractedData.slice(0, 120)}]`;
+        const preview =
+          rec.extractedData.length > 500
+            ? rec.extractedData.slice(0, 500) + '...'
+            : rec.extractedData;
+        historyText += ` [EXTRACTED: ${preview}]`;
       }
       historyText += '\n';
     }

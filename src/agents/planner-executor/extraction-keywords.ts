@@ -41,6 +41,14 @@ const AMBIGUOUS_VERBS: readonly string[] = [
   'show',
   'tell',
   'display',
+  'provide',
+  'report',
+  'give',
+  'identify',
+  'collect',
+  'gather',
+  'return',
+  'output',
 ];
 
 /**
@@ -67,6 +75,14 @@ const EXTRACTION_PHRASES: readonly string[] = [
   'find the name',
   'how many',
   'how much',
+  'sale price',
+  'sale prices',
+  'first 5',
+  'first 10',
+  'first 3',
+  'top 5',
+  'top 10',
+  'top 3',
 ];
 
 /**
@@ -121,6 +137,9 @@ const CONTENT_NOUNS: readonly string[] = [
   'url',
   'image',
   'photo',
+  'product',
+  'results',
+  'listings',
 ];
 
 /**
@@ -267,29 +286,38 @@ export function getExtractionDomainGuidance(): string {
   return `
 
 IMPORTANT: Extraction Task Planning Rules
-=========================================
-For extraction tasks where data is already visible on the page:
+========================================
 
-1. If the data you need is VISIBLE in the page context above:
-   - Use EXTRACT directly as the ONLY step - no clicking needed
-   - The EXTRACT action will read the visible text from the page
+STEP 1 - CHECK CURRENT URL:
+Before choosing an action, compare the Current URL to the goal.
+- Does the current page contain the data requested?
+- If the goal mentions a specific section/page (e.g., "show hn", "top stories", "/show"), check if the URL matches.
+- If you are NOT on the right page, NAVIGATE to the correct URL first.
 
-2. If you need to navigate to see the data:
-   - First CLICK or NAVIGATE to the right page
-   - Then use EXTRACT
+STEP 2 - EXTRACT VISIBLE DATA:
+If the data is VISIBLE in the page context:
+- Use EXTRACT directly - no clicking needed
+- The EXTRACT action reads visible text from the current page
 
 CRITICAL: Do NOT click on links to external sites when extracting.
 - Post/article titles often link to EXTERNAL sites
 - To extract a title that is visible, use EXTRACT directly on the current page
 - Only click if you need to navigate to a detail page (e.g., for comments)
 
-Example for "Extract the title of the first post":
-{
-  "action": "EXTRACT",
-  "target": "first post title",
-  "goal": "Extract the first post title from the page",
-  "verify": []
-}
+Example - wrong page, need to navigate first:
+Goal: "extract the title of the first showhn post on hackernews show"
+Current URL: news.ycombinator.com/news (wrong page, need /show)
+{"action":"NAVIGATE","target":"https://news.ycombinator.com/show","verify":[{"predicate":"url_contains","args":["show"]}],"reasoning":"navigate to Show HN page"}
+
+Example - on correct page, extract directly:
+Goal: "extract the title of the first showhn post"
+Current URL: news.ycombinator.com/show (correct page, data visible)
+{"action":"EXTRACT","target":"first ShowHN post title","goal":"Extract the title of the first ShowHN post","verify":[],"reasoning":"data is visible on current page"}
+
+Example - product price on listing page:
+Goal: "find the price of the first laptop"
+Current URL: store.com/laptops (correct page, prices visible)
+{"action":"EXTRACT","target":"price of first laptop","goal":"Extract the price of the first laptop listing","verify":[],"reasoning":"prices are visible in listing elements"}
 `;
 }
 
