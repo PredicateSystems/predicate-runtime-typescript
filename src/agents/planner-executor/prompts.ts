@@ -342,3 +342,47 @@ export interface StepwisePlannerResponse {
   heuristicHints?: Array<Record<string, unknown>>;
   reasoning?: string;
 }
+
+export function buildVisionExecutorPrompt(
+  goal: string,
+  intent: string | undefined,
+  inputText?: string,
+  actionType?: string
+): [string, string] {
+  const isTypeAction = actionType === 'TYPE_AND_SUBMIT' || actionType === 'TYPE';
+
+  const system = `You are a vision-based executor for browser automation.
+You receive a screenshot of the current browser viewport.
+Your job is to identify the correct location to act on based on the goal and return a coordinate-based action.
+
+SUPPORTED ACTIONS (return ONLY ONE line):
+- CLICK_XY(x, y) — click at pixel coordinates (x, y) in the viewport
+- CLICK_RECT(x, y, w, h) — click the center of rectangle at (x, y) with width w and height h
+- TYPE_AT("text") — type text at the currently focused position
+- PRESS("key") — press a keyboard key (e.g., "Enter", "Tab", "Escape")
+- NONE — if you cannot determine the correct action from the screenshot
+
+RULES:
+- Estimate pixel coordinates from the screenshot
+- Coordinates (0,0) are the top-left corner of the viewport
+- Be precise with coordinates — aim for the center of the target element
+- Do NOT output any reasoning or prose
+- Do NOT use CLICK(id) — only coordinate-based actions
+- Example: CLICK_XY(450, 320)`;
+
+  let actionHint: string;
+  if (isTypeAction && inputText) {
+    actionHint = `First CLICK_XY on the input field, then TYPE_AT("${inputText}")`;
+  } else {
+    actionHint = `Return CLICK_XY(x, y) for the element matching: "${intent || goal}"`;
+  }
+
+  const user = `/no_think
+Goal: ${goal}
+${intent ? `Intent: ${intent}` : ''}
+${inputText ? `Input: "${inputText}"` : ''}
+
+${actionHint}`;
+
+  return [system, user];
+}

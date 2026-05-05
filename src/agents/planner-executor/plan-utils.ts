@@ -119,6 +119,36 @@ function parseExactActionLine(line: string): ParsedAction | null {
     return { action: 'NONE', args: [] };
   }
 
+  // CLICK_XY(x, y) — vision fallback coordinate click
+  const clickXyMatch = line.match(
+    /^CLICK_XY\s*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$/i
+  );
+  if (clickXyMatch) {
+    return { action: 'CLICK_XY', args: [Number(clickXyMatch[1]), Number(clickXyMatch[2])] };
+  }
+
+  // CLICK_RECT(x, y, w, h) — vision fallback rect click
+  const clickRectMatch = line.match(
+    /^CLICK_RECT\s*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$/i
+  );
+  if (clickRectMatch) {
+    return {
+      action: 'CLICK_RECT',
+      args: [
+        Number(clickRectMatch[1]),
+        Number(clickRectMatch[2]),
+        Number(clickRectMatch[3]),
+        Number(clickRectMatch[4]),
+      ],
+    };
+  }
+
+  // TYPE_AT("text") — vision fallback: type at current position
+  const typeAtMatch = line.match(/^TYPE_AT\s*\(\s*["']([\s\S]*?)["']\s*\)$/i);
+  if (typeAtMatch) {
+    return { action: 'TYPE_AT', args: [typeAtMatch[1]] };
+  }
+
   return null;
 }
 

@@ -64,12 +64,6 @@ export function detectSnapshotFailure(snapshot: Snapshot | null): VisionFallback
   const elements = snapshot.elements || [];
   const elementCount = elements.length;
 
-  // If we have sufficient elements, the snapshot is usable
-  // regardless of what diagnostics say
-  if (elementCount >= 10) {
-    return { shouldUseVision: false, reason: null };
-  }
-
   // Check explicit status field (tri-state: success, error, require_vision)
   const status = snapshot.status || 'success';
 
@@ -100,12 +94,15 @@ export function detectSnapshotFailure(snapshot: Snapshot | null): VisionFallback
     }
   }
 
-  // Very few elements usually indicates a problem
-  if (elementCount < 3) {
-    return { shouldUseVision: true, reason: 'too_few_elements' };
+  // If we have sufficient elements, the snapshot is usable
+  // regardless of what diagnostics say
+  const VISION_THRESHOLD = 10;
+  if (elementCount >= VISION_THRESHOLD) {
+    return { shouldUseVision: false, reason: null };
   }
 
-  return { shouldUseVision: false, reason: null };
+  // Below threshold — trigger vision fallback
+  return { shouldUseVision: true, reason: 'below_threshold' };
 }
 
 /**

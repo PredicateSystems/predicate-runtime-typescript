@@ -40,6 +40,7 @@ import { StepStatus, ReplanPatchSchema } from './plan-models';
 import {
   buildStepwisePlannerPrompt,
   buildExecutorPrompt,
+  buildVisionExecutorPrompt,
   type StepwisePlannerResponse,
 } from './prompts';
 import { buildRepairPlannerPrompt } from './replan-prompts';
@@ -430,8 +431,14 @@ export interface AgentRuntime {
   /** Click an element by ID */
   click(elementId: number): Promise<void>;
 
+  /** Click at viewport coordinates (vision fallback) */
+  clickCoordinate?(x: number, y: number): Promise<void>;
+
   /** Type text into an element */
   type(elementId: number, text: string): Promise<void>;
+
+  /** Type text at current position without targeting an element (vision fallback) */
+  typeCoordinate?(text: string): Promise<void>;
 
   /** Press a key */
   pressKey(key: string): Promise<void>;
@@ -450,6 +457,12 @@ export interface AgentRuntime {
 
   /** Read page content as markdown (for EXTRACT actions) */
   readMarkdown?(options?: { maxChars?: number }): Promise<string | null>;
+}
+
+const LOGIN_INTENT_RE = /\b(log\s*in|sign\s*in|authenticate|auth\s*flow|credentials)\b/i;
+
+function taskHasLoginIntent(task: string): boolean {
+  return LOGIN_INTENT_RE.test(task);
 }
 
 // ---------------------------------------------------------------------------
@@ -816,7 +829,11 @@ export class PlannerExecutorAgent {
 
         if (this.config.authBoundary.enabled) {
           const authResult = detectAuthBoundary(currentUrl, this.config.authBoundary);
-          if (authResult.isAuthBoundary && this.config.authBoundary.stopOnAuth) {
+          if (
+            authResult.isAuthBoundary &&
+            this.config.authBoundary.stopOnAuth &&
+            !taskHasLoginIntent(task)
+          ) {
             success = true;
             error = this.config.authBoundary.authSuccessMessage;
             break;
@@ -1069,7 +1086,11 @@ export class PlannerExecutorAgent {
         if (finalOutcome.status === StepStatus.FAILED) {
           if (this.config.authBoundary.enabled) {
             const authResult = detectAuthBoundary(currentUrl, this.config.authBoundary);
-            if (authResult.isAuthBoundary && this.config.authBoundary.stopOnAuth) {
+            if (
+              authResult.isAuthBoundary &&
+              this.config.authBoundary.stopOnAuth &&
+              !taskHasLoginIntent(task)
+            ) {
               finalOutcome = {
                 ...finalOutcome,
                 status: StepStatus.SUCCESS,
@@ -1434,7 +1455,12 @@ export class PlannerExecutorAgent {
     const currentUrl = ctx.snapshot?.url || '';
     const stepGoal = plannerAction.intent || plannerAction.action;
 
-    if (this.config.preStepVerification && (plannerAction.verify?.length || 0) > 0) {
+    if (
+      this.config.preStepVerification &&
+      (plannerAction.verify?.length || 0) > 0 &&
+      plannerAction.action !== 'TYPE_AND_SUBMIT' &&
+      plannerAction.action !== 'TYPE'
+    ) {
       const alreadySatisfied = await this.checkPreStepVerification(runtime, plannerAction);
       if (alreadySatisfied) {
         return {
@@ -1859,6 +1885,117 @@ export class PlannerExecutorAgent {
     try {
       const elementId = parsed.args[0] as number;
 
+      // Vision-fallback coordinate actions
+      if (parsed.action === 'CLICK_XY') {
+        const [vx, vy] = parsed.args as [number, number];
+        if (this.config.verbose) {
+          console.log(`[VISION] CLICK_XY(${vx}, ${vy})`);
+        }
+        if (runtime.clickCoordinate) {
+          await runtime.clickCoordinate(vx, vy);
+        } else {
+          return {
+            stepId: stepNum,
+            goal: stepGoal,
+            status: StepStatus.FAILED,
+            llmResponseText: executorResp?.content,
+            verificationPassed: false,
+            usedVision: true,
+            durationMs: Date.now() - stepStart,
+            error: 'CLICK_XY not supported by runtime (no clickCoordinate method)',
+          };
+        }
+        await new Promise(r => setTimeout(r, 500));
+        const urlAfter = await runtime.getCurrentUrl();
+        const verificationPassed = await this.verifyStepOutcome(runtime, plannerAction);
+        return {
+          stepId: stepNum,
+          goal: stepGoal,
+          status: verificationPassed ? StepStatus.SUCCESS : StepStatus.FAILED,
+          actionTaken: `CLICK_XY(${vx}, ${vy})`,
+          llmResponseText: executorResp?.content,
+          verificationPassed,
+          usedVision: true,
+          durationMs: Date.now() - stepStart,
+          urlBefore: currentUrl,
+          urlAfter,
+        };
+      }
+
+      if (parsed.action === 'CLICK_RECT') {
+        const [rx, ry, rw, rh] = parsed.args as [number, number, number, number];
+        const cx = rx + rw / 2;
+        const cy = ry + rh / 2;
+        if (this.config.verbose) {
+          console.log(`[VISION] CLICK_RECT(${rx}, ${ry}, ${rw}, ${rh}) → center (${cx}, ${cy})`);
+        }
+        if (runtime.clickCoordinate) {
+          await runtime.clickCoordinate(cx, cy);
+        } else {
+          return {
+            stepId: stepNum,
+            goal: stepGoal,
+            status: StepStatus.FAILED,
+            llmResponseText: executorResp?.content,
+            verificationPassed: false,
+            usedVision: true,
+            durationMs: Date.now() - stepStart,
+            error: 'CLICK_RECT not supported by runtime (no clickCoordinate method)',
+          };
+        }
+        await new Promise(r => setTimeout(r, 500));
+        const urlAfter = await runtime.getCurrentUrl();
+        const verificationPassed = await this.verifyStepOutcome(runtime, plannerAction);
+        return {
+          stepId: stepNum,
+          goal: stepGoal,
+          status: verificationPassed ? StepStatus.SUCCESS : StepStatus.FAILED,
+          actionTaken: `CLICK_RECT(${rx}, ${ry}, ${rw}, ${rh})`,
+          llmResponseText: executorResp?.content,
+          verificationPassed,
+          usedVision: true,
+          durationMs: Date.now() - stepStart,
+          urlBefore: currentUrl,
+          urlAfter,
+        };
+      }
+
+      if (parsed.action === 'TYPE_AT') {
+        const [textToType] = parsed.args as [string];
+        if (this.config.verbose) {
+          console.log(`[VISION] TYPE_AT("${textToType}")`);
+        }
+        if (runtime.typeCoordinate) {
+          await runtime.typeCoordinate(textToType);
+        } else {
+          return {
+            stepId: stepNum,
+            goal: stepGoal,
+            status: StepStatus.FAILED,
+            llmResponseText: executorResp?.content,
+            verificationPassed: false,
+            usedVision: true,
+            durationMs: Date.now() - stepStart,
+            error: 'TYPE_AT not supported by runtime (no typeCoordinate method)',
+          };
+        }
+        await new Promise(r => setTimeout(r, 300));
+        const urlAfter = await runtime.getCurrentUrl();
+        const verificationPassed = await this.verifyStepOutcome(runtime, plannerAction);
+        return {
+          stepId: stepNum,
+          goal: stepGoal,
+          status: verificationPassed ? StepStatus.SUCCESS : StepStatus.FAILED,
+          actionTaken: `TYPE_AT("${textToType}")`,
+          llmResponseText: executorResp?.content,
+          verificationPassed,
+          usedVision: true,
+          durationMs: Date.now() - stepStart,
+          urlBefore: currentUrl,
+          urlAfter,
+        };
+      }
+
       if (parsed.action === 'CLICK') {
         const targetElement =
           activeCtx.snapshot?.elements.find(element => element.id === elementId) || null;
@@ -2191,6 +2328,11 @@ export class PlannerExecutorAgent {
         ).length;
 
         const visionResult = detectSnapshotFailure(snap);
+        if (this.config.verbose) {
+          console.log(
+            `[VISION CHECK] elements=${(snap.elements || []).length}, shouldUseVision=${visionResult.shouldUseVision}, reason=${visionResult.reason}, screenshot=${screenshotBase64 ? 'yes' : 'no'}, executor.supportsVision=${this.executor.supportsVision()}`
+          );
+        }
         if (visionResult.shouldUseVision) {
           requiresVision = true;
           visionReason = visionResult.reason;
@@ -2402,6 +2544,12 @@ export class PlannerExecutorAgent {
       );
     }
 
+    if (this.config.verbose) {
+      console.log(
+        `[SNAPSHOT CONTEXT] requiresVision=${requiresVision}, visionReason=${visionReason}, screenshotBase64=${screenshotBase64 != null ? `present(${screenshotBase64.length}chars)` : 'null'}, executor.supportsVision=${this.executor.supportsVision()}, elements=${lastSnapshot?.elements?.length || 0}`
+      );
+    }
+
     return {
       snapshot: lastSnapshot,
       compactRepresentation: lastCompact,
@@ -2524,9 +2672,15 @@ export class PlannerExecutorAgent {
 
     if (heuristicAction === null) {
       if (shouldUseVision) {
+        const [visSystem, visUser] = buildVisionExecutorPrompt(
+          plannerAction.intent || `${plannerAction.action} element`,
+          plannerAction.intent,
+          plannerAction.input,
+          plannerAction.action
+        );
         executorResp = await this.executor.generateWithImage(
-          execSystem,
-          execUser,
+          visSystem,
+          visUser,
           ctx.screenshotBase64!,
           {
             temperature: this.config.executorTemperature,
