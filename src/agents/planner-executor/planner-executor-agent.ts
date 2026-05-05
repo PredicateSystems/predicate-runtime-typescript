@@ -1459,7 +1459,8 @@ export class PlannerExecutorAgent {
       this.config.preStepVerification &&
       (plannerAction.verify?.length || 0) > 0 &&
       plannerAction.action !== 'TYPE_AND_SUBMIT' &&
-      plannerAction.action !== 'TYPE'
+      plannerAction.action !== 'TYPE' &&
+      plannerAction.action !== 'CLICK'
     ) {
       const alreadySatisfied = await this.checkPreStepVerification(runtime, plannerAction);
       if (alreadySatisfied) {
@@ -1905,6 +1906,15 @@ export class PlannerExecutorAgent {
             error: 'CLICK_XY not supported by runtime (no clickCoordinate method)',
           };
         }
+        const isVisionTypeAction =
+          plannerAction.action === 'TYPE_AND_SUBMIT' || plannerAction.action === 'TYPE';
+        if (isVisionTypeAction && plannerAction.input && runtime.typeCoordinate) {
+          await new Promise(r => setTimeout(r, 300));
+          await runtime.typeCoordinate(plannerAction.input);
+          if (this.config.verbose) {
+            console.log(`[VISION] AUTO-TYPE after CLICK_XY: "${plannerAction.input}"`);
+          }
+        }
         await new Promise(r => setTimeout(r, 500));
         const urlAfter = await runtime.getCurrentUrl();
         const verificationPassed = await this.verifyStepOutcome(runtime, plannerAction);
@@ -1912,7 +1922,10 @@ export class PlannerExecutorAgent {
           stepId: stepNum,
           goal: stepGoal,
           status: verificationPassed ? StepStatus.SUCCESS : StepStatus.FAILED,
-          actionTaken: `CLICK_XY(${vx}, ${vy})`,
+          actionTaken:
+            isVisionTypeAction && plannerAction.input
+              ? `CLICK_XY(${vx}, ${vy}) + TYPE_AT("${plannerAction.input}")`
+              : `CLICK_XY(${vx}, ${vy})`,
           llmResponseText: executorResp?.content,
           verificationPassed,
           usedVision: true,

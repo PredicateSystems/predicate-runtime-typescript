@@ -58,7 +58,7 @@ export function buildStepwisePlannerPrompt(
 
 Actions:
 - NAVIGATE: Go directly to a URL when the next destination is known. Set "target" to the URL.
-- CLICK: Click an element. Set "intent" to element type/role. Set "input" to EXACT text from elements list.
+- CLICK: Click an element. Set "intent" to describe the SPECIFIC element (include label, placeholder, or nearby text, e.g. "email textbox", "display name field", "Next button", NOT just "textbox" or "button"). Set "input" to EXACT text from elements list.
 - TYPE_AND_SUBMIT: Type text into a search box and submit. Set "input" to the SEARCH QUERY from the goal (NOT the element label).
 - SCROLL: Scroll page. Set "direction" to "up" or "down".
 - WAIT: Wait for content to appear when a follow-up verification is needed.
@@ -104,7 +104,9 @@ RULES:
 8. Output ONLY JSON - no <think> tags, no markdown, no prose
 9. Do NOT output <think> or any reasoning
 10. Do NOT return DONE until ALL parts of the goal are complete
-11. Never copy example URLs from these instructions. Only NAVIGATE to a URL from the user's task, the current page, or a visible element.`;
+11. Never copy example URLs from these instructions. Only NAVIGATE to a URL from the user's task, the current page, or a visible element.
+12. For multi-step forms: process each field as a separate step, then CLICK the Next/Submit button as a separate step.
+13. "intent" must be SPECIFIC: describe the element with its label or context (e.g., "email field", "plan dropdown", "Next button on step 2")`;
 
   // Inject extraction-specific guidance when the goal is an extraction task
   const extractionGuidance = isExtractionTask(goal) ? getExtractionDomainGuidance() : '';
@@ -368,11 +370,12 @@ RULES:
 - Be precise with coordinates — aim for the center of the target element
 - Do NOT output any reasoning or prose
 - Do NOT use CLICK(id) — only coordinate-based actions
+- For form fields, match the field by its LABEL or PLACEHOLDER text, not just any input
 - Example: CLICK_XY(450, 320)`;
 
   let actionHint: string;
   if (isTypeAction && inputText) {
-    actionHint = `First CLICK_XY on the input field, then TYPE_AT("${inputText}")`;
+    actionHint = `Return CLICK_XY(x, y) for the INPUT FIELD matching: "${intent || goal}". Look at field labels/placeholders to find the correct field.`;
   } else {
     actionHint = `Return CLICK_XY(x, y) for the element matching: "${intent || goal}"`;
   }
